@@ -1,0 +1,12 @@
+@import 'tailwindcss';
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+button,
+input,
+textarea {
+  outline-color: #10b981;
+}

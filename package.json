@@ -1,0 +1,31 @@
+{
+  "name": "runcoach-local",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.17.1",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build:packages": "tsc -b packages/shared packages/importers packages/analytics",
+    "build": "pnpm build:packages && pnpm --filter @runcoach/server build && pnpm --filter @runcoach/web build",
+    "db:migrate": "pnpm build:packages && pnpm --filter @runcoach/server db:migrate",
+    "dev": "pnpm build:packages && pnpm -r --parallel --filter @runcoach/server --filter @runcoach/web dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "pnpm build:packages && vitest run --exclude '**/private-samples.test.ts'",
+    "test:private": "pnpm build:packages && vitest run apps/server/test/private-samples.test.ts",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@types/node": "^24.5.2",
+    "eslint": "^9.36.0",
+    "globals": "^16.4.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.44.1",
+    "vitest": "^3.2.4"
+  }
+}

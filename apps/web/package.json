@@ -1,0 +1,26 @@
+{
+  "name": "@runcoach/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b && vite build",
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@runcoach/shared": "workspace:*",
+    "@tanstack/react-query": "^5.87.4",
+    "echarts": "^6.0.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.3",
+    "tailwindcss": "^4.1.13",
+    "vite": "^7.1.7"
+  }
+}

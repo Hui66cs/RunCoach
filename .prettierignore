@@ -1,0 +1,6 @@
+node_modules
+dist
+coverage
+private-fixtures
+.local-data
+pnpm-lock.yaml
