@@ -24,6 +24,7 @@ function differenceRatio(left: number | null | undefined, right: number | null):
 function scoreCandidate(
   incoming: NormalizedActivity,
   candidate: ActivityMatchView,
+  policy: MatchingPolicy,
 ): MatchCandidate | null {
   if (incoming.activityType !== candidate.activityType) return null;
 
@@ -31,7 +32,7 @@ function scoreCandidate(
     Math.abs(
       new Date(incoming.startTimeUtc).getTime() - new Date(candidate.startTimeUtc).getTime(),
     ) / 1000;
-  if (timeDifferenceSeconds > defaultMatchingPolicy.candidateWindowSeconds) return null;
+  if (timeDifferenceSeconds > policy.candidateWindowSeconds) return null;
 
   const distanceDifferenceRatio = differenceRatio(
     incoming.distanceMeters,
@@ -70,6 +71,7 @@ function scoreCandidate(
 
   return {
     activityId: candidate.id,
+    activityVersion: candidate.version,
     score,
     timeDifferenceSeconds,
     distanceDifferenceRatio,
@@ -84,7 +86,7 @@ export function matchActivity(
   policy: MatchingPolicy = defaultMatchingPolicy,
 ): MatchResult {
   const candidates = activities
-    .map((activity) => ({ activity, score: scoreCandidate(incoming, activity) }))
+    .map((activity) => ({ activity, score: scoreCandidate(incoming, activity, policy) }))
     .filter(
       (entry): entry is { activity: ActivityMatchView; score: MatchCandidate } =>
         entry.score !== null,

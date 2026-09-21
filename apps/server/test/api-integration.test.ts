@@ -72,5 +72,19 @@ describe('import HTTP API', () => {
     const listResponse = await app.inject({ method: 'GET', url: '/api/activities' });
     expect(listResponse.statusCode).toBe(200);
     expect(listResponse.json<{ items: unknown[] }>().items).toHaveLength(1);
+
+    const historyResponse = await app.inject({
+      method: 'GET',
+      url: '/api/imports/history?limit=10',
+    });
+    expect(historyResponse.statusCode).toBe(200);
+    expect(historyResponse.json<{ jobs: unknown[] }>().jobs).toHaveLength(1);
+
+    const invalidResolve = await app.inject({
+      method: 'POST',
+      url: `/api/imports/items/${report.items[0]?.itemId}/resolve`,
+      payload: { action: 'ATTACH', activityId: 'invalid' },
+    });
+    expect(invalidResolve.statusCode).toBe(400);
   });
 });

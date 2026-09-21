@@ -1,14 +1,25 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
 import type {
   ActivityDetail,
   ActivityListItem,
   ActivityPatch,
   ImportOutcome,
+  ImportHistoryPage,
+  MatchDecision,
   NormalizedActivity,
+  NormalizedActivitySummary,
+  PendingImportsPage,
+  ResolveImportRequest,
+  ResolveImportResult,
   SourceType,
 } from '@runcoach/shared';
-import type { ActivityMatchView } from '@runcoach/importers';
+import {
+  importOutcomeSchema,
+  matchDecisionSchema,
+  normalizedActivitySummarySchema,
+} from '@runcoach/shared';
+import { summarizeActivity, type ActivityMatchView } from '@runcoach/importers';
 import type { RunCoachDatabase } from '../db/client.js';
 import {
   activities,
@@ -31,6 +42,24 @@ export interface ApplySourceInput {
   importItemId: string;
 }
 
+export class RepositoryConflictError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+interface PendingResolutionInput {
+  itemId: string;
+  request: ResolveImportRequest;
+  normalized: NormalizedActivity | null;
+  rawFileId: string;
+  fileSha256: string;
+  legacyMatch?: MatchDecision;
+}
+
 export interface ApplySourceResult {
   activityId: string;
   sourceId: string;
@@ -38,6 +67,55 @@ export interface ApplySourceResult {
 
 export interface MergeHooks {
   afterSeriesInserted?: () => void;
+}
+
+function encodeCursor(createdAt: string, id: string): string {
+  return Buffer.from(JSON.stringify([createdAt, id]), 'utf8').toString('base64url');
+}
+
+function decodeCursor(cursor: string | undefined): [string, string] | null {
+  if (cursor === undefined) return null;
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+    return Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      parsed.every((value) => typeof value === 'string')
+      ? [parsed[0] as string, parsed[1] as string]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredMatch(
+  raw: string | null,
+  activityVersions: ReadonlyMap<string, number>,
+): MatchDecision | null {
+  if (raw === null) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    const current = matchDecisionSchema.safeParse(value);
+    if (current.success) return current.data;
+    if (typeof value !== 'object' || value === null) return null;
+    const record = value as Record<string, unknown>;
+    const candidates = record['candidates'];
+    if (record['kind'] !== 'PENDING_CONFIRMATION' || !Array.isArray(candidates)) return null;
+    const upgraded = {
+      ...record,
+      candidates: candidates.map((candidate: unknown) => {
+        if (typeof candidate !== 'object' || candidate === null || !('activityId' in candidate))
+          return candidate;
+        const activityId = candidate.activityId;
+        return typeof activityId === 'string' && activityVersions.has(activityId)
+          ? { ...candidate, activityVersion: activityVersions.get(activityId) }
+          : candidate;
+      }),
+    };
+    const legacy = matchDecisionSchema.safeParse(upgraded);
+    return legacy.success ? legacy.data : null;
+  } catch {
+    return null;
+  }
 }
 
 const provenanceFields = [
@@ -53,8 +131,23 @@ const provenanceFields = [
   'deviceName',
 ] as const;
 
+const sourcePriority: Record<SourceType | 'USER', number> = {
+  CSV: 100,
+  PARROTAO: 200,
+  FIT: 300,
+  USER: 400,
+};
+
 function now(): string {
   return new Date().toISOString();
+}
+
+function adapterVersion(activity: NormalizedActivity): string {
+  return activity.sourceType === 'FIT' ? 'garmin-fit-sdk:21' : 'supplied-csv:v1';
+}
+
+function summaryPayload(activity: NormalizedActivity): string {
+  return JSON.stringify(summarizeActivity(activity, adapterVersion(activity)));
 }
 
 function compactSnapshot(activity: typeof activities.$inferSelect): Record<string, unknown> {
@@ -149,8 +242,9 @@ export class ActivityRepository {
       sourceId?: string | null;
       matchScore?: number | null;
       matchDetails?: unknown;
-      normalizedPayload?: NormalizedActivity | null;
+      normalizedPayload?: NormalizedActivitySummary | null;
       errorMessage?: string | null;
+      errorCode?: string | null;
     } = {},
   ): void {
     this.db
@@ -168,6 +262,7 @@ export class ActivityRepository {
             ? null
             : JSON.stringify(values.normalizedPayload),
         errorMessage: values.errorMessage ?? null,
+        errorCode: values.errorCode ?? null,
         completedAt: outcome === 'PENDING_CONFIRMATION' ? null : now(),
       })
       .where(eq(importItems.id, itemId))
@@ -212,6 +307,52 @@ export class ActivityRepository {
       .get();
   }
 
+  findActiveSourceByIdentity(
+    sourceType: SourceType,
+    identityKey: string,
+  ): typeof activitySources.$inferSelect | undefined {
+    return this.db
+      .select()
+      .from(activitySources)
+      .where(
+        and(
+          eq(activitySources.sourceType, sourceType),
+          eq(activitySources.identityKey, identityKey),
+          eq(activitySources.active, true),
+        ),
+      )
+      .get();
+  }
+
+  adoptLegacyCsvIdentity(
+    normalized: NormalizedActivity,
+  ): typeof activitySources.$inferSelect | undefined {
+    if (normalized.sourceIdentityKey === null || normalized.sourceIdentityKey === undefined)
+      return undefined;
+    const candidates = this.db
+      .select({ source: activitySources })
+      .from(activitySources)
+      .innerJoin(activities, eq(activitySources.activityId, activities.id))
+      .where(
+        and(
+          eq(activitySources.sourceType, 'CSV'),
+          eq(activitySources.active, true),
+          eq(activities.activityType, normalized.activityType),
+          eq(activities.startTimeUtc, normalized.startTimeUtc),
+        ),
+      )
+      .all();
+    if (candidates.length !== 1) return undefined;
+    const source = candidates[0]?.source;
+    if (source === undefined) return undefined;
+    this.db
+      .update(activitySources)
+      .set({ identityKey: normalized.sourceIdentityKey })
+      .where(eq(activitySources.id, source.id))
+      .run();
+    return { ...source, identityKey: normalized.sourceIdentityKey };
+  }
+
   getMatchViews(): ActivityMatchView[] {
     const rows = this.db.select().from(activities).all();
     const fitActivityIds = new Set(
@@ -230,6 +371,7 @@ export class ActivityRepository {
       durationSeconds: activity.durationSeconds,
       deviceName: activity.deviceName,
       hasFitSource: fitActivityIds.has(activity.id),
+      version: activity.version,
     }));
   }
 
@@ -267,10 +409,12 @@ export class ActivityRepository {
           activityId,
           sourceType: normalized.sourceType,
           externalId: normalized.sourceExternalId ?? null,
+          identityKey: normalized.sourceIdentityKey ?? null,
+          contentSha256: normalized.sourceContentSha256 ?? null,
           fileSha256: normalized.sourceType === 'FIT' ? input.fileSha256 : null,
           rawFileId: input.rawFileId,
           rawPayload: JSON.stringify(input.rawPayload),
-          normalizedPayload: JSON.stringify(normalized),
+          normalizedPayload: summaryPayload(normalized),
           createdAt: timestamp,
         })
         .run();
@@ -322,36 +466,75 @@ export class ActivityRepository {
           activityId,
           sourceType: normalized.sourceType,
           externalId: normalized.sourceExternalId ?? null,
+          identityKey: normalized.sourceIdentityKey ?? null,
+          contentSha256: normalized.sourceContentSha256 ?? null,
           fileSha256: normalized.sourceType === 'FIT' ? input.fileSha256 : null,
           rawFileId: input.rawFileId,
           rawPayload: JSON.stringify(input.rawPayload),
-          normalizedPayload: JSON.stringify(normalized),
+          normalizedPayload: summaryPayload(normalized),
           createdAt: timestamp,
         })
         .run();
       this.insertSeries(tx, activityId, sourceId, normalized);
       hooks.afterSeriesInserted?.();
 
+      const currentProvenance = new Map(
+        tx
+          .select()
+          .from(activityFieldProvenance)
+          .where(eq(activityFieldProvenance.activityId, activityId))
+          .all()
+          .map((row) => [row.fieldName, row.originType as SourceType | 'USER']),
+      );
+      const canReplace = (field: (typeof provenanceFields)[number]): boolean => {
+        const current = currentProvenance.get(field);
+        return (
+          current === undefined || sourcePriority[normalized.sourceType] >= sourcePriority[current]
+        );
+      };
+
       const updates = {
-        activityType: normalized.activityType,
-        startTimeUtc: normalized.startTimeUtc,
-        originalStartTime: normalized.originalStartTime,
-        timezoneOffsetMinutes: normalized.timezoneOffsetMinutes,
-        localDate: normalized.localDate,
+        activityType: canReplace('activityType') ? normalized.activityType : before.activityType,
+        startTimeUtc: canReplace('startTimeUtc') ? normalized.startTimeUtc : before.startTimeUtc,
+        originalStartTime: canReplace('startTimeUtc')
+          ? normalized.originalStartTime
+          : before.originalStartTime,
+        timezoneOffsetMinutes: canReplace('startTimeUtc')
+          ? normalized.timezoneOffsetMinutes
+          : before.timezoneOffsetMinutes,
+        localDate: canReplace('startTimeUtc') ? normalized.localDate : before.localDate,
         name:
-          before.userEditedName || normalized.name === null || normalized.name === undefined
+          before.userEditedName ||
+          !canReplace('name') ||
+          normalized.name === null ||
+          normalized.name === undefined
             ? before.name
             : normalized.name,
         notes:
-          before.userEditedNotes || normalized.notes === null || normalized.notes === undefined
+          before.userEditedNotes ||
+          !canReplace('notes') ||
+          normalized.notes === null ||
+          normalized.notes === undefined
             ? before.notes
             : normalized.notes,
-        distanceMeters: normalized.distanceMeters ?? before.distanceMeters,
-        durationSeconds: normalized.durationSeconds ?? before.durationSeconds,
-        movingDurationSeconds: normalized.movingDurationSeconds ?? before.movingDurationSeconds,
-        averageHeartRateBpm: normalized.averageHeartRateBpm ?? before.averageHeartRateBpm,
-        maxHeartRateBpm: normalized.maxHeartRateBpm ?? before.maxHeartRateBpm,
-        deviceName: normalized.deviceName ?? before.deviceName,
+        distanceMeters: canReplace('distanceMeters')
+          ? (normalized.distanceMeters ?? before.distanceMeters)
+          : before.distanceMeters,
+        durationSeconds: canReplace('durationSeconds')
+          ? (normalized.durationSeconds ?? before.durationSeconds)
+          : before.durationSeconds,
+        movingDurationSeconds: canReplace('movingDurationSeconds')
+          ? (normalized.movingDurationSeconds ?? before.movingDurationSeconds)
+          : before.movingDurationSeconds,
+        averageHeartRateBpm: canReplace('averageHeartRateBpm')
+          ? (normalized.averageHeartRateBpm ?? before.averageHeartRateBpm)
+          : before.averageHeartRateBpm,
+        maxHeartRateBpm: canReplace('maxHeartRateBpm')
+          ? (normalized.maxHeartRateBpm ?? before.maxHeartRateBpm)
+          : before.maxHeartRateBpm,
+        deviceName: canReplace('deviceName')
+          ? (normalized.deviceName ?? before.deviceName)
+          : before.deviceName,
         hasTimeSeries: before.hasTimeSeries || normalized.samples.length > 0,
         primaryTimeSeriesSourceId:
           normalized.samples.length > 0 ? sourceId : before.primaryTimeSeriesSourceId,
@@ -362,6 +545,7 @@ export class ActivityRepository {
 
       for (const field of provenanceFields) {
         if (!fieldHasValue(normalized, field)) continue;
+        if (!canReplace(field)) continue;
         if (field === 'name' && before.userEditedName) continue;
         if (field === 'notes' && before.userEditedNotes) continue;
         tx.insert(activityFieldProvenance)
@@ -393,6 +577,99 @@ export class ActivityRepository {
         })
         .run();
       return { activityId, sourceId };
+    });
+  }
+
+  refreshCsvSource(existingSourceId: string, input: ApplySourceInput): ApplySourceResult {
+    return this.db.transaction((tx) => {
+      const existingSource = tx
+        .select()
+        .from(activitySources)
+        .where(
+          and(
+            eq(activitySources.id, existingSourceId),
+            eq(activitySources.sourceType, 'CSV'),
+            eq(activitySources.active, true),
+          ),
+        )
+        .get();
+      if (existingSource === undefined) {
+        throw new RepositoryConflictError('CSV_SOURCE_STALE', 'CSV source is no longer active');
+      }
+      const before = tx
+        .select()
+        .from(activities)
+        .where(eq(activities.id, existingSource.activityId))
+        .get();
+      if (before === undefined) throw new Error('CSV activity does not exist');
+      const timestamp = now();
+      const sourceId = randomUUID();
+      tx.update(activitySources)
+        .set({ active: false })
+        .where(and(eq(activitySources.id, existingSourceId), eq(activitySources.active, true)))
+        .run();
+      tx.insert(activitySources)
+        .values({
+          id: sourceId,
+          activityId: before.id,
+          sourceType: 'CSV',
+          externalId: input.normalized.sourceExternalId ?? null,
+          identityKey: input.normalized.sourceIdentityKey ?? null,
+          contentSha256: input.normalized.sourceContentSha256 ?? null,
+          fileSha256: null,
+          rawFileId: input.rawFileId,
+          rawPayload: JSON.stringify(input.rawPayload),
+          normalizedPayload: summaryPayload(input.normalized),
+          createdAt: timestamp,
+        })
+        .run();
+
+      const provenanceRows = tx
+        .select()
+        .from(activityFieldProvenance)
+        .where(eq(activityFieldProvenance.activityId, before.id))
+        .all();
+      const provenance = new Map(provenanceRows.map((row) => [row.fieldName, row.originType]));
+      const updates: Record<string, unknown> = {};
+      for (const field of provenanceFields) {
+        const value = input.normalized[field];
+        if (value === null || value === undefined) continue;
+        const currentOrigin = provenance.get(field);
+        if (currentOrigin !== undefined && currentOrigin !== 'CSV') continue;
+        updates[field] = value;
+        tx.insert(activityFieldProvenance)
+          .values({
+            activityId: before.id,
+            fieldName: field,
+            originType: 'CSV',
+            sourceId,
+            updatedAt: timestamp,
+          })
+          .onConflictDoUpdate({
+            target: [activityFieldProvenance.activityId, activityFieldProvenance.fieldName],
+            set: { originType: 'CSV', sourceId, updatedAt: timestamp },
+          })
+          .run();
+      }
+      tx.update(activities)
+        .set({ ...updates, version: before.version + 1, updatedAt: timestamp })
+        .where(eq(activities.id, before.id))
+        .run();
+      const after = tx.select().from(activities).where(eq(activities.id, before.id)).get();
+      if (after === undefined) throw new Error('CSV refresh could not read activity');
+      tx.insert(activityMergeEvents)
+        .values({
+          id: randomUUID(),
+          activityId: before.id,
+          importItemId: input.importItemId,
+          action: 'CSV_REFRESH',
+          sourceId,
+          beforeSnapshot: JSON.stringify(compactSnapshot(before)),
+          afterSnapshot: JSON.stringify(compactSnapshot(after)),
+          createdAt: timestamp,
+        })
+        .run();
+      return { activityId: before.id, sourceId };
     });
   }
 
@@ -602,6 +879,335 @@ export class ActivityRepository {
         createdAt: event.createdAt,
       })),
     };
+  }
+
+  getPendingRawContext(itemId: string): {
+    item: typeof importItems.$inferSelect;
+    job: typeof importJobs.$inferSelect;
+    rawFile: typeof rawFiles.$inferSelect;
+  } | null {
+    const row = this.db
+      .select({ item: importItems, job: importJobs, rawFile: rawFiles })
+      .from(importItems)
+      .innerJoin(importJobs, eq(importItems.importJobId, importJobs.id))
+      .innerJoin(rawFiles, eq(importJobs.rawFileId, rawFiles.id))
+      .where(eq(importItems.id, itemId))
+      .get();
+    return row ?? null;
+  }
+
+  getPendingItem(itemId: string): PendingImportsPage['items'][number] | null {
+    const row = this.db
+      .select({ item: importItems, job: importJobs })
+      .from(importItems)
+      .innerJoin(importJobs, eq(importItems.importJobId, importJobs.id))
+      .where(and(eq(importItems.id, itemId), eq(importItems.status, 'PENDING')))
+      .get();
+    if (row === undefined) return null;
+    const summary = normalizedActivitySummarySchema.safeParse(
+      row.item.normalizedPayload === null ? null : JSON.parse(row.item.normalizedPayload),
+    );
+    const activitiesById = new Map(
+      this.listActivities().map((activity) => [activity.id, activity]),
+    );
+    const match = parseStoredMatch(
+      row.item.matchDetails,
+      new Map(this.getMatchViews().map((activity) => [activity.id, activity.version])),
+    );
+    if (!summary.success || match === null || match.kind !== 'PENDING_CONFIRMATION') return null;
+    return {
+      itemId: row.item.id,
+      jobId: row.job.id,
+      importedAt: row.item.createdAt,
+      originalFileName: row.job.originalFileName,
+      status: row.item.status,
+      reason: match.reason,
+      summary: summary.data,
+      candidates: match.candidates.flatMap((candidate) => {
+        const activity = activitiesById.get(candidate.activityId);
+        return activity === undefined ? [] : [{ ...candidate, activity }];
+      }),
+      errorCode: row.item.errorCode,
+      errorMessage: row.item.errorMessage,
+    };
+  }
+
+  recordPendingError(itemId: string, errorCode: string, errorMessage: string): void {
+    this.db
+      .update(importItems)
+      .set({ errorCode, errorMessage })
+      .where(and(eq(importItems.id, itemId), eq(importItems.status, 'PENDING')))
+      .run();
+  }
+
+  listPending(limit: number, cursor?: string): PendingImportsPage {
+    const decodedCursor = decodeCursor(cursor);
+    if (cursor !== undefined && decodedCursor === null) {
+      throw new RepositoryConflictError('INVALID_CURSOR', 'Invalid pagination cursor');
+    }
+    const cursorFilter =
+      decodedCursor === null
+        ? undefined
+        : or(
+            lt(importItems.createdAt, decodedCursor[0]),
+            and(eq(importItems.createdAt, decodedCursor[0]), lt(importItems.id, decodedCursor[1])),
+          );
+    const rows = this.db
+      .select({ item: importItems, job: importJobs })
+      .from(importItems)
+      .innerJoin(importJobs, eq(importItems.importJobId, importJobs.id))
+      .where(and(eq(importItems.status, 'PENDING'), cursorFilter))
+      .orderBy(desc(importItems.createdAt), desc(importItems.id))
+      .limit(limit + 1)
+      .all();
+    const activitiesById = new Map(
+      this.listActivities().map((activity) => [activity.id, activity]),
+    );
+    const activityVersions = new Map(
+      this.getMatchViews().map((activity) => [activity.id, activity.version]),
+    );
+    const pageRows = rows.slice(0, limit);
+    const items = pageRows.flatMap(({ item, job }) => {
+      const summary = normalizedActivitySummarySchema.safeParse(
+        item.normalizedPayload === null ? null : JSON.parse(item.normalizedPayload),
+      );
+      const match = parseStoredMatch(item.matchDetails, activityVersions);
+      if (!summary.success || match === null || match.kind !== 'PENDING_CONFIRMATION') return [];
+      return [
+        {
+          itemId: item.id,
+          jobId: job.id,
+          importedAt: item.createdAt,
+          originalFileName: job.originalFileName,
+          status: item.status,
+          reason: match.reason,
+          summary: summary.data,
+          candidates: match.candidates.flatMap((candidate) => {
+            const activity = activitiesById.get(candidate.activityId);
+            return activity === undefined ? [] : [{ ...candidate, activity }];
+          }),
+          errorCode: item.errorCode,
+          errorMessage: item.errorMessage,
+        },
+      ];
+    });
+    const totalRow = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(importItems)
+      .where(eq(importItems.status, 'PENDING'))
+      .get();
+    const last = pageRows.at(-1);
+    return {
+      items,
+      total: Number(totalRow?.count ?? 0),
+      nextCursor:
+        rows.length > limit && last !== undefined
+          ? encodeCursor(last.item.createdAt, last.item.id)
+          : null,
+    };
+  }
+
+  listImportHistory(limit: number, cursor?: string): ImportHistoryPage {
+    const decodedCursor = decodeCursor(cursor);
+    if (cursor !== undefined && decodedCursor === null) {
+      throw new RepositoryConflictError('INVALID_CURSOR', 'Invalid pagination cursor');
+    }
+    const cursorFilter =
+      decodedCursor === null
+        ? undefined
+        : or(
+            lt(importJobs.createdAt, decodedCursor[0]),
+            and(eq(importJobs.createdAt, decodedCursor[0]), lt(importJobs.id, decodedCursor[1])),
+          );
+    const rows = this.db
+      .select()
+      .from(importJobs)
+      .where(cursorFilter)
+      .orderBy(desc(importJobs.createdAt), desc(importJobs.id))
+      .limit(limit + 1)
+      .all();
+    const pageRows = rows.slice(0, limit);
+    const jobs = pageRows.map((job) => {
+      const itemRows = this.db
+        .select()
+        .from(importItems)
+        .where(eq(importItems.importJobId, job.id))
+        .orderBy(asc(importItems.createdAt))
+        .all();
+      const counts: ImportHistoryPage['jobs'][number]['counts'] = {};
+      for (const item of itemRows) {
+        const parsed = importOutcomeSchema.safeParse(item.outcome);
+        if (parsed.success) counts[parsed.data] = (counts[parsed.data] ?? 0) + 1;
+      }
+      return {
+        jobId: job.id,
+        sourceType: job.sourceType as SourceType,
+        originalFileName: job.originalFileName,
+        status: job.status,
+        createdAt: job.createdAt,
+        completedAt: job.completedAt,
+        requiresAction: itemRows.some((item) => item.status === 'PENDING'),
+        counts,
+        items: itemRows.map((item) => ({
+          itemId: item.id,
+          outcome: importOutcomeSchema.safeParse(item.outcome).success
+            ? (item.outcome as ImportOutcome)
+            : null,
+          activityId: item.activityId,
+          status: item.status,
+          errorCode: item.errorCode,
+          errorMessage: item.errorMessage,
+        })),
+      };
+    });
+    const last = pageRows.at(-1);
+    return {
+      jobs,
+      nextCursor:
+        rows.length > limit && last !== undefined ? encodeCursor(last.createdAt, last.id) : null,
+    };
+  }
+
+  resolvePending(input: PendingResolutionInput): ResolveImportResult {
+    return this.db.transaction((tx) => {
+      const item = tx.select().from(importItems).where(eq(importItems.id, input.itemId)).get();
+      if (item === undefined)
+        throw new RepositoryConflictError('NOT_FOUND', 'Import item not found');
+      if (
+        item.status === 'COMPLETED' &&
+        item.resolutionAction !== null &&
+        item.resolvedAt !== null
+      ) {
+        const sameAction =
+          item.resolutionAction === input.request.action &&
+          (input.request.action !== 'ATTACH' ||
+            item.resolutionActivityId === input.request.activityId);
+        if (!sameAction) {
+          throw new RepositoryConflictError('ALREADY_RESOLVED', 'Import item was already resolved');
+        }
+        return {
+          itemId: item.id,
+          status: item.status,
+          outcome: importOutcomeSchema.parse(item.outcome),
+          action: input.request.action,
+          activityId: item.activityId,
+          sourceId: item.sourceId,
+          resolvedAt: item.resolvedAt,
+          idempotent: true,
+        };
+      }
+      const claimed = tx
+        .update(importItems)
+        .set({ status: 'RESOLVING', errorCode: null, errorMessage: null })
+        .where(and(eq(importItems.id, input.itemId), eq(importItems.status, 'PENDING')))
+        .run();
+      if (claimed.changes !== 1) {
+        throw new RepositoryConflictError('RESOLUTION_CONFLICT', 'Import item is not pending');
+      }
+      const resolvedAt = now();
+      if (input.request.action === 'SKIP') {
+        tx.update(importItems)
+          .set({
+            status: 'COMPLETED',
+            outcome: 'SKIPPED',
+            resolutionAction: 'SKIP',
+            resolvedAt,
+            completedAt: resolvedAt,
+          })
+          .where(eq(importItems.id, input.itemId))
+          .run();
+        return {
+          itemId: input.itemId,
+          status: 'COMPLETED',
+          outcome: 'SKIPPED',
+          action: 'SKIP',
+          activityId: null,
+          sourceId: null,
+          resolvedAt,
+          idempotent: false,
+        };
+      }
+      if (input.normalized === null) throw new Error('Decoded FIT activity is required');
+      const duplicate = tx
+        .select()
+        .from(activitySources)
+        .where(
+          and(
+            eq(activitySources.sourceType, 'FIT'),
+            eq(activitySources.fileSha256, input.fileSha256),
+            eq(activitySources.active, true),
+          ),
+        )
+        .get();
+      if (duplicate !== undefined) {
+        throw new RepositoryConflictError('FIT_ALREADY_ATTACHED', 'FIT file is already attached');
+      }
+
+      let applied: ApplySourceResult;
+      if (input.request.action === 'ATTACH') {
+        const targetActivityId = input.request.activityId;
+        const match =
+          input.legacyMatch ?? matchDecisionSchema.parse(JSON.parse(item.matchDetails ?? 'null'));
+        if (match.kind !== 'PENDING_CONFIRMATION')
+          throw new Error('Pending match details are invalid');
+        const candidate = match.candidates.find((entry) => entry.activityId === targetActivityId);
+        if (candidate === undefined) {
+          throw new RepositoryConflictError(
+            'INVALID_CANDIDATE',
+            'Activity is not a recorded candidate',
+          );
+        }
+        const target = tx
+          .select()
+          .from(activities)
+          .where(eq(activities.id, targetActivityId))
+          .get();
+        if (target === undefined)
+          throw new RepositoryConflictError('NOT_FOUND', 'Activity not found');
+        if (target.version !== candidate.activityVersion) {
+          throw new RepositoryConflictError('STALE_CANDIDATE', 'Candidate activity changed');
+        }
+        applied = this.mergeSourceIntoActivity(targetActivityId, {
+          normalized: input.normalized,
+          rawFileId: input.rawFileId,
+          fileSha256: input.fileSha256,
+          rawPayload: input.normalized.rawSummary,
+          importItemId: input.itemId,
+        });
+      } else {
+        applied = this.createActivityFromSource({
+          normalized: input.normalized,
+          rawFileId: input.rawFileId,
+          fileSha256: input.fileSha256,
+          rawPayload: input.normalized.rawSummary,
+          importItemId: input.itemId,
+        });
+      }
+      const outcome = input.request.action === 'ATTACH' ? 'UPGRADED' : 'CREATED';
+      tx.update(importItems)
+        .set({
+          status: 'COMPLETED',
+          outcome,
+          activityId: applied.activityId,
+          sourceId: applied.sourceId,
+          resolutionAction: input.request.action,
+          resolutionActivityId: input.request.action === 'ATTACH' ? input.request.activityId : null,
+          resolvedAt,
+          completedAt: resolvedAt,
+        })
+        .where(eq(importItems.id, input.itemId))
+        .run();
+      return {
+        itemId: input.itemId,
+        status: 'COMPLETED',
+        outcome,
+        action: input.request.action,
+        activityId: applied.activityId,
+        sourceId: applied.sourceId,
+        resolvedAt,
+        idempotent: false,
+      };
+    });
   }
 
   countRows(): {

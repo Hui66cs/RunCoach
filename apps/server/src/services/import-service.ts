@@ -3,16 +3,27 @@ import {
   GarminFitAdapter,
   SuppliedActivitiesCsvAdapter,
   matchActivity,
+  summarizeActivity,
   type FitInput,
 } from '@runcoach/importers';
 import type {
   ImportItemResult,
   ImportReport,
+  ImportHistoryPage,
   MatchDecision,
   NormalizedActivity,
+  PendingImportsPage,
+  ResolveImportRequest,
+  ResolveImportResult,
 } from '@runcoach/shared';
-import type { ActivityRepository, MergeHooks } from '../repositories/activity-repository.js';
+import { matchDecisionSchema } from '@runcoach/shared';
+import {
+  RepositoryConflictError,
+  type ActivityRepository,
+  type MergeHooks,
+} from '../repositories/activity-repository.js';
 import type { RawFileStore } from '../storage/raw-file-store.js';
+import { sanitizeErrorMessage } from '../errors.js';
 
 interface ImportFileInput {
   buffer: Buffer;
@@ -21,7 +32,7 @@ interface ImportFileInput {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : '未知导入错误';
+  return sanitizeErrorMessage(error);
 }
 
 function itemResult(
@@ -56,6 +67,93 @@ export class ImportService {
     private readonly localOffsetMinutes: number,
   ) {}
 
+  listPending(limit: number, cursor?: string): PendingImportsPage {
+    return this.repository.listPending(limit, cursor);
+  }
+
+  listHistory(limit: number, cursor?: string): ImportHistoryPage {
+    return this.repository.listImportHistory(limit, cursor);
+  }
+
+  getImportItem(itemId: string): unknown {
+    const context = this.repository.getPendingRawContext(itemId);
+    if (context === null) return null;
+    const pending =
+      context.item.status === 'PENDING' ? this.repository.getPendingItem(itemId) : null;
+    return (
+      pending ?? {
+        itemId: context.item.id,
+        jobId: context.job.id,
+        status: context.item.status,
+        outcome: context.item.outcome,
+        activityId: context.item.activityId,
+        sourceId: context.item.sourceId,
+        importedAt: context.item.createdAt,
+        originalFileName: context.job.originalFileName,
+        errorCode: context.item.errorCode,
+        errorMessage: context.item.errorMessage,
+        resolutionAction: context.item.resolutionAction,
+        resolvedAt: context.item.resolvedAt,
+      }
+    );
+  }
+
+  async resolveImport(itemId: string, request: ResolveImportRequest): Promise<ResolveImportResult> {
+    const context = this.repository.getPendingRawContext(itemId);
+    if (context === null) throw new Error('IMPORT_ITEM_NOT_FOUND');
+    try {
+      let normalized: NormalizedActivity | null = null;
+      if (request.action !== 'SKIP' && context.item.status !== 'COMPLETED') {
+        const buffer = this.fileStore.readAndVerify(context.rawFile);
+        const decoded = await this.fitAdapter.decode({
+          buffer,
+          fileSha256: context.rawFile.sha256,
+          defaultTimezoneOffsetMinutes: this.localOffsetMinutes,
+        });
+        if (decoded.length !== 1 || decoded[0] === undefined)
+          throw new Error('FIT_SESSION_COUNT_INVALID');
+        normalized = decoded[0];
+      }
+      let legacyMatch: MatchDecision | undefined;
+      if (request.action === 'ATTACH' && normalized !== null) {
+        let storedMatchIsCurrent = false;
+        try {
+          storedMatchIsCurrent = matchDecisionSchema.safeParse(
+            context.item.matchDetails === null ? null : JSON.parse(context.item.matchDetails),
+          ).success;
+        } catch {
+          storedMatchIsCurrent = false;
+        }
+        if (!storedMatchIsCurrent) {
+          const rematched = matchActivity(normalized, this.repository.getMatchViews()).decision;
+          if (
+            rematched.kind !== 'PENDING_CONFIRMATION' ||
+            !rematched.candidates.some((candidate) => candidate.activityId === request.activityId)
+          ) {
+            throw new RepositoryConflictError(
+              'STALE_CANDIDATE',
+              'Legacy pending candidate is no longer valid',
+            );
+          }
+          legacyMatch = rematched;
+        }
+      }
+      return this.repository.resolvePending({
+        itemId,
+        request,
+        normalized,
+        rawFileId: context.rawFile.id,
+        fileSha256: context.rawFile.sha256,
+        ...(legacyMatch === undefined ? {} : { legacyMatch }),
+      });
+    } catch (error) {
+      if (!(error instanceof RepositoryConflictError)) {
+        this.repository.recordPendingError(itemId, 'RESOLVE_FAILED', errorMessage(error));
+      }
+      throw error;
+    }
+  }
+
   async importCsv(input: ImportFileInput): Promise<ImportReport> {
     if (path.extname(input.originalName).toLowerCase() !== '.csv') {
       throw new Error('CSV 导入只接受 .csv 文件');
@@ -72,8 +170,57 @@ export class ImportService {
         fileSha256: stored.sha256,
         timezoneOffsetMinutes: this.localOffsetMinutes,
       });
+      const seenIdentities = new Set<string>();
       for (const [index, normalized] of normalizedActivities.entries()) {
         const itemId = this.repository.createImportItem(jobId, index + 2);
+        const identity = normalized.sourceIdentityKey;
+        if (identity === null || identity === undefined) throw new Error('CSV_IDENTITY_MISSING');
+        if (seenIdentities.has(identity)) {
+          hasErrors = true;
+          this.repository.completeImportItem(itemId, 'FAILED', {
+            errorCode: 'CSV_IDENTITY_COLLISION',
+            errorMessage: 'Multiple CSV rows have the same type and start time',
+          });
+          items.push(itemResult(itemId, 'FAILED', 'CSV 活动身份冲突'));
+          continue;
+        }
+        seenIdentities.add(identity);
+        const identitySource =
+          this.repository.findActiveSourceByIdentity('CSV', identity) ??
+          this.repository.adoptLegacyCsvIdentity(normalized);
+        if (identitySource !== undefined) {
+          if (
+            identitySource.contentSha256 !== null &&
+            identitySource.contentSha256 === normalized.sourceContentSha256
+          ) {
+            this.repository.completeImportItem(itemId, 'DUPLICATE_SKIPPED', {
+              activityId: identitySource.activityId,
+              sourceId: identitySource.id,
+            });
+            items.push(
+              itemResult(itemId, 'DUPLICATE_SKIPPED', 'CSV 行未变化，已跳过', {
+                activityId: identitySource.activityId,
+                sourceId: identitySource.id,
+              }),
+            );
+          } else {
+            const refreshed = this.repository.refreshCsvSource(identitySource.id, {
+              normalized,
+              rawFileId,
+              fileSha256: stored.sha256,
+              rawPayload: normalized.rawSummary,
+              importItemId: itemId,
+            });
+            this.repository.completeImportItem(itemId, 'REFRESHED', refreshed);
+            items.push(
+              itemResult(itemId, 'REFRESHED', 'CSV 摘要已刷新', {
+                activityId: refreshed.activityId,
+                sourceId: refreshed.sourceId,
+              }),
+            );
+          }
+          continue;
+        }
         const existing =
           normalized.sourceExternalId === null || normalized.sourceExternalId === undefined
             ? undefined
@@ -205,7 +352,7 @@ export class ImportService {
       this.repository.completeImportItem(itemId, 'PENDING_CONFIRMATION', {
         matchScore: match.candidates[0]?.score ?? null,
         matchDetails: match,
-        normalizedPayload: normalized,
+        normalizedPayload: summarizeActivity(normalized, 'garmin-fit-sdk:21'),
       });
       this.repository.completeImportJob(jobId, false);
       return {

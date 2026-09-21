@@ -13,6 +13,7 @@ export interface ActivityMatchView {
   durationSeconds: number | null;
   deviceName: string | null;
   hasFitSource: boolean;
+  version: number;
 }
 
 export interface MatchingPolicy {

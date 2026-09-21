@@ -11,6 +11,12 @@ export interface StoredRawFile {
   byteLength: number;
 }
 
+export interface StoredRawFileReference {
+  relativePath: string;
+  sha256: string;
+  byteLength: number;
+}
+
 function safeExtension(originalName: string): string {
   const extension = path.extname(originalName).toLowerCase();
   return /^\.[a-z0-9]{1,8}$/.test(extension) ? extension : '.bin';
@@ -52,5 +58,18 @@ export class RawFileStore {
       mediaType,
       byteLength: buffer.byteLength,
     };
+  }
+
+  readAndVerify(file: StoredRawFileReference): Buffer {
+    const root = path.resolve(this.dataRoot);
+    const absolutePath = path.resolve(root, file.relativePath);
+    if (!absolutePath.startsWith(`${root}${path.sep}`)) {
+      throw new Error('RAW_FILE_PATH_INVALID');
+    }
+    const buffer = fs.readFileSync(absolutePath);
+    if (buffer.byteLength !== file.byteLength) throw new Error('RAW_FILE_SIZE_MISMATCH');
+    const digest = createHash('sha256').update(buffer).digest('hex').toUpperCase();
+    if (digest !== file.sha256.toUpperCase()) throw new Error('RAW_FILE_HASH_MISMATCH');
+    return buffer;
   }
 }

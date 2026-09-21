@@ -5,6 +5,7 @@
     { "path": "./packages/importers" },
     { "path": "./packages/analytics" },
     { "path": "./apps/server" },
-    { "path": "./apps/web" }
+    { "path": "./apps/web" },
+    { "path": "./tsconfig.e2e.json" }
   ]
 }

@@ -46,14 +46,20 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm test:private
+pnpm exec playwright install chromium
+pnpm test:e2e
 pnpm build
 pnpm db:migrate
 ```
 
 Runtime data defaults to `.local-data` in development. Override it with `RUNCOACH_DATA_DIR`. CSV timestamps use `RUNCOACH_LOCAL_OFFSET_MINUTES`, defaulting to `480` (`+08:00`).
 
+## Import management
+
+The UI has Activity, Pending, and Import History views. Medium-confidence FIT matches can be attached to a recorded candidate, created as a new activity, or skipped. Resolution always re-reads and verifies the retained FIT file. CSV re-exports use a stable activity identity, so renaming or reordering an export does not duplicate canonical activities; changed rows create immutable source revisions.
+
 ## Current limitations
 
 - No dashboard, training plan, ParroTao online sync, AI coach, authentication, backup/restore, or formal map.
-- Pending match decisions are represented by the API and import report; the minimal UI reports them but only automatic high-confidence and low-confidence-new paths are exercised by the supplied samples.
+- A source system without an activity ID cannot distinguish two activities of the same type starting in the same UTC second. A collision within one CSV is rejected explicitly.
 - Distribution is not supported because the selected Garmin FIT SDK has license restrictions that require review before redistribution.

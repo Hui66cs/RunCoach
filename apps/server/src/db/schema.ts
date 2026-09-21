@@ -51,15 +51,19 @@ export const rawFiles = sqliteTable('raw_files', {
   createdAt: text('created_at').notNull(),
 });
 
-export const importJobs = sqliteTable('import_jobs', {
-  id: text('id').primaryKey(),
-  sourceType: text('source_type').notNull(),
-  status: text('status').notNull(),
-  originalFileName: text('original_file_name').notNull(),
-  rawFileId: text('raw_file_id').references(() => rawFiles.id, { onDelete: 'restrict' }),
-  createdAt: text('created_at').notNull(),
-  completedAt: text('completed_at'),
-});
+export const importJobs = sqliteTable(
+  'import_jobs',
+  {
+    id: text('id').primaryKey(),
+    sourceType: text('source_type').notNull(),
+    status: text('status').notNull(),
+    originalFileName: text('original_file_name').notNull(),
+    rawFileId: text('raw_file_id').references(() => rawFiles.id, { onDelete: 'restrict' }),
+    createdAt: text('created_at').notNull(),
+    completedAt: text('completed_at'),
+  },
+  (table) => [index('import_jobs_created_idx').on(table.createdAt, table.id)],
+);
 
 export const importItems = sqliteTable(
   'import_items',
@@ -77,10 +81,19 @@ export const importItems = sqliteTable(
     matchDetails: text('match_details'),
     normalizedPayload: text('normalized_payload'),
     errorMessage: text('error_message'),
+    errorCode: text('error_code'),
+    resolutionAction: text('resolution_action'),
+    resolutionActivityId: text('resolution_activity_id').references(() => activities.id, {
+      onDelete: 'restrict',
+    }),
+    resolvedAt: text('resolved_at'),
     createdAt: text('created_at').notNull(),
     completedAt: text('completed_at'),
   },
-  (table) => [index('import_items_job_idx').on(table.importJobId)],
+  (table) => [
+    index('import_items_job_idx').on(table.importJobId),
+    index('import_items_status_created_idx').on(table.status, table.createdAt),
+  ],
 );
 
 export const activitySources = sqliteTable(
@@ -92,6 +105,8 @@ export const activitySources = sqliteTable(
       .references(() => activities.id, { onDelete: 'cascade' }),
     sourceType: text('source_type').notNull(),
     externalId: text('external_id'),
+    identityKey: text('identity_key'),
+    contentSha256: text('content_sha256'),
     fileSha256: text('file_sha256'),
     rawFileId: text('raw_file_id').references(() => rawFiles.id, { onDelete: 'restrict' }),
     rawPayload: text('raw_payload').notNull(),
@@ -107,6 +122,9 @@ export const activitySources = sqliteTable(
     uniqueIndex('activity_sources_fit_sha_uq')
       .on(table.fileSha256)
       .where(sql`${table.sourceType} = 'FIT' and ${table.fileSha256} is not null`),
+    uniqueIndex('activity_sources_active_identity_uq')
+      .on(table.sourceType, table.identityKey)
+      .where(sql`${table.identityKey} is not null and ${table.active} = 1`),
     uniqueIndex('activity_sources_id_activity_uq').on(table.id, table.activityId),
   ],
 );

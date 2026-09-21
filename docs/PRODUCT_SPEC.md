@@ -12,6 +12,8 @@ The user can edit an activity name and notes. Later source imports must preserve
 
 The import report distinguishes created, upgraded, duplicate, pending-confirmation, and failed items. Medium-confidence and ambiguous matches require an explicit decision instead of an automatic merge.
 
+The import workspace exposes three lightweight views: activities, pending decisions, and import history. A pending FIT can be attached only to a displayed candidate, created as a new canonical activity, or skipped after confirmation. Completed decisions are auditable and same-action retries are idempotent.
+
 ## Data guarantees
 
 - A canonical activity can have multiple sources.
@@ -20,6 +22,8 @@ The import report distinguishes created, upgraded, duplicate, pending-confirmati
 - User-edited name and notes have priority over every imported source.
 - Missing FIT values do not erase existing values.
 - A failed merge leaves no partial source, sample, lap, provenance, or canonical update.
+- CSV identity survives file rename, row reorder, and incremental export. Changed source content creates a new immutable revision while retaining the canonical activity ID.
+- Source and pending JSON contain summaries and counts only; FIT series live in dedicated tables and the retained raw file remains authoritative.
 
 ## Out of scope
 

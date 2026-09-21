@@ -8,6 +8,7 @@ export type ActivityType = z.infer<typeof activityTypeSchema>;
 
 export const importOutcomeSchema = z.enum([
   'CREATED',
+  'REFRESHED',
   'UPGRADED',
   'DUPLICATE_SKIPPED',
   'PENDING_CONFIRMATION',
@@ -47,6 +48,8 @@ export type NormalizedLap = z.infer<typeof normalizedLapSchema>;
 export const normalizedActivitySchema = z.object({
   sourceType: sourceTypeSchema,
   sourceExternalId: z.string().min(1).nullable().optional(),
+  sourceIdentityKey: z.string().min(1).nullable().optional(),
+  sourceContentSha256: z.string().length(64).nullable().optional(),
   activityType: activityTypeSchema,
   startTimeUtc: z.iso.datetime(),
   originalStartTime: z.string().min(1),
@@ -66,8 +69,19 @@ export const normalizedActivitySchema = z.object({
 });
 export type NormalizedActivity = z.infer<typeof normalizedActivitySchema>;
 
+export const normalizedActivitySummarySchema = normalizedActivitySchema
+  .omit({ samples: true, laps: true, rawSummary: true })
+  .extend({
+    schemaVersion: z.literal(1),
+    adapterVersion: z.string().min(1),
+    sampleCount: z.number().int().nonnegative(),
+    lapCount: z.number().int().nonnegative(),
+  });
+export type NormalizedActivitySummary = z.infer<typeof normalizedActivitySummarySchema>;
+
 export const matchCandidateSchema = z.object({
   activityId: z.string().uuid(),
+  activityVersion: z.number().int().positive(),
   score: z.number().min(0).max(100),
   timeDifferenceSeconds: z.number().nonnegative(),
   distanceDifferenceRatio: z.number().nonnegative().nullable(),
@@ -128,6 +142,66 @@ export const resolveImportSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('SKIP') }),
 ]);
 export type ResolveImportRequest = z.infer<typeof resolveImportSchema>;
+
+export interface PendingCandidateView extends MatchCandidate {
+  activity: ActivityListItem;
+}
+
+export interface PendingImportView {
+  itemId: string;
+  jobId: string;
+  importedAt: string;
+  originalFileName: string;
+  status: string;
+  reason: string;
+  summary: NormalizedActivitySummary;
+  candidates: PendingCandidateView[];
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface PendingImportsPage {
+  items: PendingImportView[];
+  total: number;
+  nextCursor: string | null;
+}
+
+export interface ResolveImportResult {
+  itemId: string;
+  status: string;
+  outcome: ImportOutcome;
+  action: ResolveImportRequest['action'];
+  activityId: string | null;
+  sourceId: string | null;
+  resolvedAt: string;
+  idempotent: boolean;
+}
+
+export interface ImportHistoryItemView {
+  itemId: string;
+  outcome: ImportOutcome | null;
+  activityId: string | null;
+  status: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface ImportHistoryJobView {
+  jobId: string;
+  sourceType: SourceType;
+  originalFileName: string;
+  status: string;
+  createdAt: string;
+  completedAt: string | null;
+  requiresAction: boolean;
+  counts: Partial<Record<ImportOutcome, number>>;
+  items: ImportHistoryItemView[];
+}
+
+export interface ImportHistoryPage {
+  jobs: ImportHistoryJobView[];
+  nextCursor: string | null;
+}
 
 export interface ActivityListItem {
   id: string;

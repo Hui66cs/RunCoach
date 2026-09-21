@@ -13,8 +13,11 @@
 ## Source identities
 
 - FIT identity is the raw file SHA-256 and is globally unique.
-- Supplied CSV identity is `file-sha256:row-number`, unique within source type.
+- Supplied CSV identity is a versioned SHA-256 of `csv:v1`, activity type, and normalized UTC start time. It excludes file name, file hash, row number, distance, and duration.
+- CSV content SHA-256 is calculated from sorted raw field names and values, excluding column order and upload metadata.
 - Original raw rows are stored on `activity_sources`; the complete CSV file is retained in `raw_files`.
+
+An unseen CSV identity creates a canonical activity. An unchanged identity/content pair is skipped. Changed content deactivates the old immutable source revision and creates a new active revision while retaining the canonical ID. Refresh only updates non-null fields currently owned by CSV or lacking provenance. A duplicate identity within one upload fails with `CSV_IDENTITY_COLLISION`.
 
 ## Matching
 
@@ -42,4 +45,10 @@ Any exception during source, sample, lap, canonical, provenance, or audit writes
 
 ## Pending decisions
 
-A pending import item retains the normalized candidate and raw-file reference. Resolution must explicitly attach it to a selected activity, create a new activity, or skip it. No candidate is silently selected.
+A pending item retains only a normalized summary, candidate scores/components/differences, candidate activity versions, and the raw-file reference. Resolution must explicitly attach it to a recorded candidate, create a new activity, or skip it. No candidate is silently selected.
+
+For attach/create, the service reopens the retained FIT, verifies path/size/SHA-256, and decodes session/lap/record data again. The repository conditionally claims `PENDING`, checks candidate version and FIT uniqueness, then resolves in one transaction. Same-action replay returns the prior result with `idempotent: true`; a different action, stale candidate, duplicate FIT attachment, or state conflict returns a conflict and leaves the item retryable where applicable.
+
+## Migration and rollback
+
+`0001_import_hardening.sql` adds source identity/content fingerprints, resolution metadata, compact summary payloads, and query indexes. Legacy duplicate CSV sources are not deleted or merged; only the earliest eligible source is backfilled for each stable identity. The migration is transactional and forward-only. Restore a pre-migration database backup before running older code.

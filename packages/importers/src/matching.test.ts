@@ -33,6 +33,7 @@ function candidate(overrides: Partial<ActivityMatchView> = {}): ActivityMatchVie
     durationSeconds: 3054,
     deviceName: null,
     hasFitSource: false,
+    version: 1,
     ...overrides,
   };
 }
@@ -55,6 +56,20 @@ describe('matchActivity', () => {
     const result = matchActivity(incoming, [
       candidate({ startTimeUtc: '2026-09-18T09:54:00.000Z', distanceMeters: 2000 }),
     ]);
+    expect(result.decision.kind).toBe('CREATE_NEW');
+  });
+
+  it('uses a custom candidate window instead of the default window', () => {
+    const result = matchActivity(
+      incoming,
+      [candidate({ startTimeUtc: '2026-09-18T09:34:55.000Z' })],
+      {
+        candidateWindowSeconds: 5 * 60,
+        autoMergeMinimum: 85,
+        pendingMinimum: 65,
+        requiredLead: 15,
+      },
+    );
     expect(result.decision.kind).toBe('CREATE_NEW');
   });
 });

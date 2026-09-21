@@ -16,11 +16,15 @@
     "lint": "eslint .",
     "test": "pnpm build:packages && vitest run --exclude '**/private-samples.test.ts'",
     "test:private": "pnpm build:packages && vitest run apps/server/test/private-samples.test.ts",
+    "dev:e2e": "pnpm -r --parallel --filter @runcoach/server --filter @runcoach/web dev",
+    "test:e2e": "pnpm build:packages && node scripts/run-e2e.mjs",
     "typecheck": "tsc -b --pretty false"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^24.5.2",
+    "cross-env": "^10.1.0",
     "eslint": "^9.36.0",
     "globals": "^16.4.0",
     "prettier": "^3.6.2",

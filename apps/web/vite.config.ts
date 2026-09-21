@@ -6,9 +6,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     host: '127.0.0.1',
-    port: 5173,
+    port: Number(process.env.VITE_WEB_PORT ?? 5173),
     proxy: {
-      '/api': 'http://127.0.0.1:3100',
+      '/api': process.env.VITE_API_TARGET ?? 'http://127.0.0.1:3100',
     },
   },
 });

@@ -1,4 +1,5 @@
 import { parse } from 'csv-parse/sync';
+import { createHash } from 'node:crypto';
 import {
   normalizedActivitySchema,
   type ActivityType,
@@ -43,6 +44,20 @@ function assertHeaders(records: CsvRecord[]): void {
   }
 }
 
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex').toUpperCase();
+}
+
+function stableRowContent(row: CsvRecord): string {
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(row)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => [key, value.trim()]),
+    ),
+  );
+}
+
 function narrowCsvRecords(value: unknown): CsvRecord[] {
   if (!Array.isArray(value)) throw new Error('CSV 解析结果不是行数组');
   const rows: unknown[] = value;
@@ -82,11 +97,15 @@ export class SuppliedActivitiesCsvAdapter implements SourceAdapter<SuppliedCsvIn
       }
       const startTimeUtc = parseLocalDateTime(originalStartTime, input.timezoneOffsetMinutes);
       const distanceKilometres = nullableNumber(row['距离']);
+      const activityType = mapActivityType(row['活动类型'] ?? '');
+      const identityKey = `csv:v1:${sha256(`csv:v1\0${activityType}\0${startTimeUtc}`)}`;
 
       return normalizedActivitySchema.parse({
         sourceType: 'CSV',
-        sourceExternalId: `${input.fileSha256}:${index + 1}`,
-        activityType: mapActivityType(row['活动类型'] ?? ''),
+        sourceExternalId: null,
+        sourceIdentityKey: identityKey,
+        sourceContentSha256: sha256(stableRowContent(row)),
+        activityType,
         startTimeUtc,
         originalStartTime,
         timezoneOffsetMinutes: input.timezoneOffsetMinutes,

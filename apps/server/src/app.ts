@@ -2,10 +2,12 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { activityPatchSchema } from '@runcoach/shared';
+import { activityPatchSchema, resolveImportSchema } from '@runcoach/shared';
 import type { AppConfig } from './config.js';
 import type { ActivityRepository } from './repositories/activity-repository.js';
 import type { ImportService } from './services/import-service.js';
+import { RepositoryConflictError } from './repositories/activity-repository.js';
+import { sanitizeErrorMessage } from './errors.js';
 
 interface AppDependencies {
   config: AppConfig;
@@ -14,6 +16,11 @@ interface AppDependencies {
 }
 
 const activityParamsSchema = z.object({ activityId: z.string().uuid() });
+const itemParamsSchema = z.object({ itemId: z.string().uuid() });
+const pageQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().min(1).optional(),
+});
 
 export async function buildApp(dependencies: AppDependencies): Promise<FastifyInstance> {
   const app = Fastify({
@@ -84,8 +91,57 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return report;
   });
 
+  app.get('/api/imports/pending', async (request, reply) => {
+    const query = pageQuerySchema.safeParse(request.query);
+    if (!query.success)
+      return reply.code(400).send({ code: 'INVALID_QUERY', message: '分页参数无效' });
+    return dependencies.importService.listPending(query.data.limit, query.data.cursor);
+  });
+
+  app.get('/api/imports/history', async (request, reply) => {
+    const query = pageQuerySchema.safeParse(request.query);
+    if (!query.success)
+      return reply.code(400).send({ code: 'INVALID_QUERY', message: '分页参数无效' });
+    return dependencies.importService.listHistory(query.data.limit, query.data.cursor);
+  });
+
+  app.get('/api/imports/items/:itemId', async (request, reply) => {
+    const params = itemParamsSchema.safeParse(request.params);
+    if (!params.success)
+      return reply.code(400).send({ code: 'INVALID_ITEM_ID', message: '导入项目 ID 无效' });
+    const item = dependencies.importService.getImportItem(params.data.itemId);
+    if (item === null)
+      return reply.code(404).send({ code: 'NOT_FOUND', message: '导入项目不存在' });
+    return item;
+  });
+
+  app.post('/api/imports/items/:itemId/resolve', async (request, reply) => {
+    const params = itemParamsSchema.safeParse(request.params);
+    const body = resolveImportSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({ code: 'INVALID_RESOLUTION', message: '处理请求无效' });
+    }
+    try {
+      return await dependencies.importService.resolveImport(params.data.itemId, body.data);
+    } catch (error) {
+      if (error instanceof RepositoryConflictError) {
+        const status = error.code === 'NOT_FOUND' ? 404 : 409;
+        return reply.code(status).send({ code: error.code, message: error.message });
+      }
+      if (error instanceof Error && error.message === 'IMPORT_ITEM_NOT_FOUND') {
+        return reply.code(404).send({ code: 'NOT_FOUND', message: '导入项目不存在' });
+      }
+      throw error;
+    }
+  });
+
   app.setErrorHandler((error, _request, reply) => {
-    const message = error instanceof Error ? error.message : '未知服务器错误';
+    if (error instanceof RepositoryConflictError) {
+      const status = error.code === 'NOT_FOUND' ? 404 : error.code === 'INVALID_CURSOR' ? 400 : 409;
+      void reply.code(status).send({ code: error.code, message: sanitizeErrorMessage(error) });
+      return;
+    }
+    const message = sanitizeErrorMessage(error);
     app.log.error({ error: message }, '请求处理失败');
     void reply.code(500).send({ code: 'INTERNAL_ERROR', message });
   });

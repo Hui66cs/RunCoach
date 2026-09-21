@@ -36,10 +36,13 @@ The only approved work is the first vertical slice.
 - [x] Import adapters, matching, merge, and audit.
 - [x] REST API and minimal UI.
 - [x] Automated verification, real private-sample smoke test, and handoff documentation.
+- [x] M1.1 stable CSV identity, immutable refresh revisions, and compact source summaries.
+- [x] M1.1 pending query/resolve loop, import history, UI, and Playwright/CI coverage.
 
 ## Known constraints
 
 - The project is private/personal, so the Garmin SDK license is acceptable for this milestone. Reassess before any redistribution.
 - The supplied CSV has no explicit timezone. This adapter interprets its timestamps with the configured local offset, defaulting to `+08:00`, and records that the offset was configured rather than present in the source.
 - Raw private samples live under `private-fixtures/` and are never committed.
+- Migration `0001_import_hardening.sql` is forward-only. Back up the data directory before applying it; restoring that backup is the rollback strategy.
 - Stable Drizzle 0.44 does not expose the later `node:sqlite` adapter, so this slice uses its supported `better-sqlite3` adapter. The native package installed successfully on the target Windows/Node 24 environment.

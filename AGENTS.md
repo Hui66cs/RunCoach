@@ -18,6 +18,7 @@ pnpm format:check
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm test:e2e
 pnpm build
 pnpm dev
 ```
@@ -26,7 +27,7 @@ pnpm dev
 
 - Keep source adapters, normalization, matching, merge policy, persistence, HTTP handlers, and React UI separate.
 - Model canonical activities separately from immutable import sources.
-- Preserve original CSV rows and FIT files. FIT imports are idempotent by SHA-256.
+- Preserve original CSV rows and FIT files. FIT imports are idempotent by SHA-256; CSV identity is independent of file name, file hash, row number, and column order.
 - Merge in a SQLite transaction; preserve the canonical activity ID and roll back fully on failure.
 - Field priority is `USER > FIT > PARROTAO > CSV`; null FIT values never replace non-null values.
 - Store UTC timestamps plus the original local representation, offset, and stable local date.
