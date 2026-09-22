@@ -6,7 +6,9 @@ RunCoach Local is a single-user, local-first running training web application fo
 
 ## Current milestone
 
-Follow `PLAN.md`. M1/M1.1 import and merge are complete and must remain compatible. M2 is complete and accepted (`docs/M2_ACCEPTANCE.md`): formal activity list/detail pages, deterministic single-activity analysis, athlete settings, and bounded series APIs, all of which must remain compatible. No further milestone is approved; confirm scope with the user before starting one. Do not add a dashboard, cross-activity trends, training plans/calendar, daily check-ins, ParroTao online sync, AI providers, authentication, cloud deployment, social features, online maps, installers, or medical conclusions.
+Follow `PLAN.md`. M1/M1.1 import and merge, and M2 formal activity records, deterministic single-activity analysis, athlete settings, and bounded series APIs are complete, accepted, and frozen; all of them must remain compatible (`docs/M2_ACCEPTANCE.md`).
+
+The approved current milestone is M2.1: performance and reliability hardening. M2.1 adds no new product modules. Its order is fixed: (a) documentation sync and a repeatable M2 performance baseline (`pnpm benchmark:m2`, results in `docs/M2_1_PERFORMANCE_BASELINE.md`); (b) the reviewer selects real hotspots based on that baseline; (c) batched optimizations; (d) regression and milestone acceptance. Do not start (b)–(d) or decide optimization approaches before the reviewer has picked hotspots. Do not add a dashboard, cross-activity trends, training plans/calendar, daily check-ins, ParroTao online sync, AI providers, authentication, cloud deployment, social features, online maps, installers, or medical conclusions.
 
 ## Commands
 
@@ -21,6 +23,7 @@ pnpm test
 pnpm test:private
 pnpm test:e2e
 pnpm build
+pnpm benchmark:m2
 pnpm dev
 ```
 
