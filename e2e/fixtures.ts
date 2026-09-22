@@ -7,4 +7,10 @@ export const matchingCsv = `活动类型,日期,标题,距离,时间,移动时�
 跑步,2026-09-18 17:24:55,公开合成跑步,8.01,00:50:54,00:50:33,150,180
 `;
 
+// A second, identity-distinct real activity used to exercise swapping a
+// completed plan's linked activity. Imported through the normal CSV flow.
+export const secondActivityCsv = `活动类型,日期,标题,距离,时间,移动时间,平均心率,最大心率
+跑步,2026-09-19 08:10:00,公开合成跑步二,6.00,00:35:00,00:34:30,148,175
+`;
+
 export const ambiguousCsv = `${matchingCsv.trimEnd()}\n跑步,2026-09-18 17:25:25,相近候选,8.02,00:50:55,00:50:34,151,181\n`;

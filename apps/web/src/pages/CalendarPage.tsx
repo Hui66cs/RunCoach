@@ -12,6 +12,7 @@ import type {
 import {
   createPlannedWorkout,
   deletePlannedWorkout,
+  getAthleteSettings,
   getCalendarRange,
   getTrainingSummary,
   updatePlannedWorkout,
@@ -24,6 +25,12 @@ import {
   plannedStatusBadge,
   workoutTypeLabels,
 } from '../components/PlannedWorkoutDialog.js';
+import {
+  browserOffsetMinutes,
+  canonicalMonth,
+  isOverdue,
+  localDateFromEpoch,
+} from '../local-date.js';
 
 const activityTypeLabels: Record<string, string> = {
   RUN: '跑步',
@@ -33,15 +40,6 @@ const activityTypeLabels: Record<string, string> = {
 
 function pad(value: number): string {
   return value.toString().padStart(2, '0');
-}
-
-function todayLocalDate(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
-function currentMonth(): string {
-  return todayLocalDate().slice(0, 7);
 }
 
 function addDays(date: string, days: number): string {
@@ -95,7 +93,7 @@ function plannedEntryClasses(workout: CalendarPlannedWorkout, today: string, com
   if (workout.completionStatus === 'SKIPPED') {
     return `${base} border-slate-600/70 bg-slate-800/40 opacity-70 hover:border-slate-400`;
   }
-  if (workout.completionStatus === 'PLANNED' && workout.scheduledLocalDate < today) {
+  if (workout.completionStatus === 'PLANNED' && isOverdue(workout.scheduledLocalDate, today)) {
     return `${base} border-amber-600/70 bg-amber-900/30 hover:border-amber-400`;
   }
   return `${base} border-emerald-700/60 bg-emerald-900/30 hover:border-emerald-500`;
@@ -104,7 +102,7 @@ function plannedEntryClasses(workout: CalendarPlannedWorkout, today: string, com
 function plannedBadgeClasses(workout: CalendarPlannedWorkout, today: string) {
   if (workout.completionStatus === 'COMPLETED') return 'bg-emerald-500/30 text-emerald-200';
   if (workout.completionStatus === 'SKIPPED') return 'bg-slate-500/30 text-slate-300';
-  if (workout.completionStatus === 'PLANNED' && workout.scheduledLocalDate < today) {
+  if (workout.completionStatus === 'PLANNED' && isOverdue(workout.scheduledLocalDate, today)) {
     return 'bg-amber-500/20 text-amber-300';
   }
   return 'bg-emerald-500/20 text-emerald-300';
@@ -120,24 +118,48 @@ function weekLabel(rollup: TrainingSummaryWeeklyRollup): string {
 
 export function CalendarPage() {
   const [search, setSearch] = useSearchParams();
+  // Canonical "today" comes from the athlete settings timezone offset — the
+  // same source the server uses for training-summary's overdue/upcoming
+  // classification — never from the browser timezone. While settings are
+  // loading (or failed) the browser offset is a deterministic fallback, and
+  // the classification switches once settings resolve.
+  const settingsQuery = useQuery({
+    queryKey: ['settings', 'athlete'],
+    queryFn: getAthleteSettings,
+  });
+  const nowMs = Date.now();
+  const canonicalToday = localDateFromEpoch(
+    nowMs,
+    settingsQuery.data?.timezoneOffsetMinutes ?? browserOffsetMinutes(nowMs),
+  );
+  const today = canonicalToday;
   const monthParam = search.get('month');
-  const month =
-    monthParam !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam) ? monthParam : currentMonth();
+  const monthParamValid = monthParam !== null && /^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam);
+  // A valid ?month=YYYY-MM always wins; only a missing or invalid parameter
+  // falls back to the athlete-timezone current month.
+  const month = monthParamValid
+    ? monthParam
+    : canonicalMonth(
+        nowMs,
+        settingsQuery.data?.timezoneOffsetMinutes ?? browserOffsetMinutes(nowMs),
+      );
   const selectMonth = (next: string) => {
     const params = new URLSearchParams(search);
     params.set('month', next);
     setSearch(params);
   };
   // Keep the URL in sync so a default or corrected month survives a reload.
+  // The replace runs once the settings request has settled, so the fallback
+  // month is final and the effect cannot loop: after the replace the parameter
+  // is valid and wins over any fallback.
   useEffect(() => {
-    if (monthParam !== month) {
+    if (!monthParamValid && (settingsQuery.isSuccess || settingsQuery.isError)) {
       const params = new URLSearchParams(search);
       params.set('month', month);
       setSearch(params, { replace: true });
     }
-  }, [month, monthParam]);
+  }, [month, monthParam, monthParamValid, search, settingsQuery.isError, settingsQuery.isSuccess]);
   const grid = monthGrid(month);
-  const today = todayLocalDate();
   const client = useQueryClient();
   const query = useQuery({
     queryKey: ['calendar', grid.from, grid.to],
@@ -283,7 +305,7 @@ export function CalendarPage() {
             ← 上一月
           </button>
           <button
-            onClick={() => selectMonth(currentMonth())}
+            onClick={() => selectMonth(today.slice(0, 7))}
             className="rounded bg-slate-800 px-3 py-2 text-sm"
           >
             今天
@@ -295,7 +317,7 @@ export function CalendarPage() {
             下一月 →
           </button>
           <button
-            onClick={() => setEditor({ mode: 'create', date: todayLocalDate() })}
+            onClick={() => setEditor({ mode: 'create', date: today })}
             className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950"
           >
             添加训练
@@ -321,6 +343,14 @@ export function CalendarPage() {
       >
         <h3 className="text-base font-semibold">
           本月执行（{monthFrom} ~ {monthTo}）
+          {summary !== undefined && (
+            <span
+              className="ml-2 text-xs font-normal text-slate-500"
+              data-testid="summary-generated-for"
+            >
+              截至 {summary.generatedForLocalDate}
+            </span>
+          )}
         </h3>
         {summaryQuery.isLoading && <p className="mt-3 text-sm text-slate-400">正在加载训练汇总…</p>}
         {summaryQuery.isError && (
@@ -433,6 +463,7 @@ export function CalendarPage() {
                 return (
                   <div
                     key={date}
+                    data-testid={isToday ? 'today-cell' : undefined}
                     className={`min-h-28 rounded-lg border p-1.5 ${
                       inMonth
                         ? 'border-slate-800 bg-slate-900'

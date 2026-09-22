@@ -8,6 +8,7 @@ import type {
   PlannedWorkoutType,
 } from '@runcoach/shared';
 import { formatDistance, formatDuration } from '../format.js';
+import { isOverdue } from '../local-date.js';
 
 export const workoutTypeLabels: Record<PlannedWorkoutType, string> = {
   EASY_RUN: '轻松跑',
@@ -28,7 +29,7 @@ export const completionStatusLabels: Record<PlannedWorkout['completionStatus'], 
 };
 
 export function plannedStatusBadge(workout: PlannedWorkout, today: string): string {
-  if (workout.completionStatus === 'PLANNED' && workout.scheduledLocalDate < today) {
+  if (workout.completionStatus === 'PLANNED' && isOverdue(workout.scheduledLocalDate, today)) {
     return '已逾期';
   }
   return completionStatusLabels[workout.completionStatus];
@@ -57,6 +58,12 @@ export function PlannedWorkoutDialog(props: {
   }, []);
   const [formError, setFormError] = useState<string | null>(null);
   const [linkSelection, setLinkSelection] = useState<string>('');
+  // Clear the picker once the link actually changes server-side so a failed
+  // request keeps the user's selection while a success returns to placeholder.
+  const linkedActivityId = props.workout?.linkedActivityId ?? null;
+  useEffect(() => {
+    setLinkSelection('');
+  }, [linkedActivityId]);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError(null);
@@ -111,10 +118,10 @@ export function PlannedWorkoutDialog(props: {
     : '';
   const workout = props.workout;
   const isCompleted = workout?.completionStatus === 'COMPLETED';
-  const isOverdue =
+  const isOverdueStatus =
     workout !== null &&
     workout.completionStatus === 'PLANNED' &&
-    workout.scheduledLocalDate < props.today;
+    isOverdue(workout.scheduledLocalDate, props.today);
   const busy = props.busy || props.completionBusy;
   return (
     <dialog
@@ -148,7 +155,7 @@ export function PlannedWorkoutDialog(props: {
                     ? 'bg-emerald-500/20 text-emerald-300'
                     : workout.completionStatus === 'SKIPPED'
                       ? 'bg-slate-500/20 text-slate-300'
-                      : isOverdue
+                      : isOverdueStatus
                         ? 'bg-amber-500/20 text-amber-300'
                         : 'bg-sky-500/20 text-sky-300'
                 }`}
@@ -247,7 +254,78 @@ export function PlannedWorkoutDialog(props: {
                   </button>
                 </>
               )}
-              {workout.completionStatus !== 'PLANNED' && (
+              {isCompleted && (
+                <>
+                  <div className="grid gap-1">
+                    <label className="text-sm text-slate-400" htmlFor="link-activity-select">
+                      {workout.linkedActivityId === null ? '补充关联活动' : '更换关联活动'}
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <select
+                        id="link-activity-select"
+                        value={linkSelection}
+                        onChange={(event) => setLinkSelection(event.target.value)}
+                        disabled={busy || props.activityCandidates.length === 0}
+                        className="min-w-0 flex-1 rounded bg-slate-950 px-3 py-2 text-sm"
+                      >
+                        <option value="">
+                          {props.activityCandidates.length === 0
+                            ? '当前范围内没有实际活动'
+                            : '请选择实际活动'}
+                        </option>
+                        {props.activityCandidates.map((activity) => (
+                          <option key={activity.id} value={activity.id}>
+                            {activity.localDate} · {activity.name ?? '未命名活动'} ·{' '}
+                            {activity.distanceMeters != null
+                              ? formatDistance(activity.distanceMeters)
+                              : '—'}
+                            {activity.durationSeconds != null
+                              ? ` · ${formatDuration(activity.durationSeconds)}`
+                              : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        disabled={busy || linkSelection === ''}
+                        onClick={() =>
+                          props.onCompletion({
+                            completionStatus: 'COMPLETED',
+                            linkedActivityId: linkSelection,
+                          })
+                        }
+                        className="rounded bg-sky-500 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50"
+                      >
+                        {workout.linkedActivityId === null ? '补充关联' : '更换关联'}
+                      </button>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => props.onCompletion({ completionStatus: 'PLANNED' })}
+                    className="rounded border border-sky-600 px-3 py-2 text-sm text-sky-300 disabled:opacity-50"
+                  >
+                    恢复为待完成
+                  </button>
+                  {workout.linkedActivityId !== null && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        props.onCompletion({
+                          completionStatus: 'COMPLETED',
+                          linkedActivityId: null,
+                        })
+                      }
+                      className="rounded border border-slate-600 px-3 py-2 text-sm disabled:opacity-50"
+                    >
+                      解除活动关联（保持已完成）
+                    </button>
+                  )}
+                </>
+              )}
+              {workout.completionStatus === 'SKIPPED' && (
                 <button
                   type="button"
                   disabled={busy}
@@ -255,18 +333,6 @@ export function PlannedWorkoutDialog(props: {
                   className="rounded border border-sky-600 px-3 py-2 text-sm text-sky-300 disabled:opacity-50"
                 >
                   恢复为待完成
-                </button>
-              )}
-              {isCompleted && workout.linkedActivityId !== null && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() =>
-                    props.onCompletion({ completionStatus: 'COMPLETED', linkedActivityId: null })
-                  }
-                  className="rounded border border-slate-600 px-3 py-2 text-sm disabled:opacity-50"
-                >
-                  解除活动关联（保持已完成）
                 </button>
               )}
             </div>

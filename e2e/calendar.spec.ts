@@ -1,5 +1,18 @@
-import { expect, test } from '@playwright/test';
-import { matchingCsv } from './fixtures.js';
+import { expect, test, type Page } from '@playwright/test';
+import { matchingCsv, secondActivityCsv } from './fixtures.js';
+
+async function cleanupPlannedWorkouts(page: Page): Promise<void> {
+  // The e2e data directory persists across runs; remove any planned workouts
+  // left over from previous runs so counts and link conflicts stay
+  // deterministic. Actual activities are identity-deduplicated on import.
+  const leftover = await page.request.get('/api/calendar?from=2026-08-01&to=2026-10-31');
+  if (leftover.ok()) {
+    const body = (await leftover.json()) as { plannedWorkouts?: Array<{ id: string }> };
+    for (const workout of body.plannedWorkouts ?? []) {
+      await page.request.delete(`/api/planned-workouts/${workout.id}`);
+    }
+  }
+}
 
 test('training calendar supports planned workout CRUD and shows real activities', async ({
   page,
@@ -11,17 +24,7 @@ test('training calendar supports planned workout CRUD and shows real activities'
   await page.goto('/calendar');
   await expect(page.getByRole('heading', { name: '训练日历' })).toBeVisible();
   await expect(page).toHaveURL(/\/calendar\?month=\d{4}-\d{2}$/);
-
-  // The e2e data directory persists across runs; remove any planned workouts
-  // left over from previous runs so counts and link conflicts stay
-  // deterministic. Actual activities are identity-deduplicated on import.
-  const leftover = await page.request.get('/api/calendar?from=2026-08-01&to=2026-10-31');
-  if (leftover.ok()) {
-    const body = (await leftover.json()) as { plannedWorkouts?: Array<{ id: string }> };
-    for (const workout of body.plannedWorkouts ?? []) {
-      await page.request.delete(`/api/planned-workouts/${workout.id}`);
-    }
-  }
+  await cleanupPlannedWorkouts(page);
 
   // All fixed-date CRUD below targets September 2026 so the test never depends
   // on the current system date; navigate there explicitly first.
@@ -48,15 +51,21 @@ test('training calendar supports planned workout CRUD and shows real activities'
   await page.getByRole('button', { name: '保存' }).click();
   await expect(page.getByTitle(/E2E 轻松跑（(待完成|已逾期)，点击编辑）/).first()).toBeVisible();
 
-  // Import a real activity and open it from the calendar month view.
+  // Import two real activities through the normal CSV flow.
   await page.goto('/imports');
   await page
     .getByLabel('导入活动 CSV')
     .setInputFiles({ name: 'public.csv', mimeType: 'text/csv', buffer: Buffer.from(matchingCsv) });
   await page.getByRole('button', { name: '开始导入' }).first().click();
+  await page.getByLabel('导入活动 CSV').setInputFiles({
+    name: 'second.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(secondActivityCsv),
+  });
+  await page.getByRole('button', { name: '开始导入' }).first().click();
 
   await page.goto('/calendar?month=2026-09');
-  const activityEntry = page.getByTitle('公开合成跑步（点击查看详情）').first();
+  const activityEntry = page.getByTitle('公开合成跑步（点击查看详情）', { exact: true }).first();
   await expect(activityEntry).toBeVisible();
 
   // Link the plan to the imported activity and complete it.
@@ -80,6 +89,15 @@ test('training calendar supports planned workout CRUD and shows real activities'
   await expect(page.getByTestId('summary-skipped-overdue')).toHaveText('0 / 0');
   await expect(page.getByTestId('adherence-rate')).toHaveText('100%');
   await expect(page.getByText('按周汇总')).toBeVisible();
+
+  // The summary's generatedForLocalDate is the athlete-timezone today the
+  // server used; the page's today highlight must match the same day.
+  const generatedFor = await page.getByTestId('summary-generated-for').textContent();
+  expect(generatedFor).toMatch(/^截至 \d{4}-\d{2}-\d{2}$/);
+  const todayIso = generatedFor!.replace('截至 ', '');
+  if (todayIso.startsWith('2026-09')) {
+    await expect(page.getByTestId('today-cell')).toContainText(todayIso.slice(8));
+  }
 
   // A reload keeps the status and the link.
   await page.reload();
@@ -149,7 +167,7 @@ test('training calendar supports planned workout CRUD and shows real activities'
   // The linked activity and the completed plan survive the delete.
   await expect(page.getByTitle('E2E 轻松跑（已完成，点击编辑）').first()).toBeVisible();
   await expect(
-    page.getByTitle('公开合成跑步（点击查看详情）').filter({ visible: true }),
+    page.getByTitle('公开合成跑步（点击查看详情）', { exact: true }).filter({ visible: true }),
   ).toHaveCount(1);
 
   // Month navigation updates the URL; unknown month param falls back.
@@ -157,6 +175,9 @@ test('training calendar supports planned workout CRUD and shows real activities'
   await expect(page).toHaveURL(/month=2026-10/);
   await page.goto('/calendar?month=invalid');
   await expect(page.locator('[data-month]')).toHaveAttribute('data-month', /^\d{4}-\d{2}$/);
+  // A valid month parameter is never overridden by the fallback month.
+  await page.goto('/calendar?month=2026-09');
+  await expect(page.locator('[data-month]')).toHaveAttribute('data-month', '2026-09');
 
   // Existing navigation keeps working.
   await page.getByRole('link', { name: '概览' }).click();
@@ -164,11 +185,100 @@ test('training calendar supports planned workout CRUD and shows real activities'
   await page.getByRole('link', { name: '趋势' }).click();
   await expect(page.getByRole('heading', { name: '趋势' })).toBeVisible();
   await page.getByRole('link', { name: '活动' }).click();
-  await expect(page.getByText('共 1 条活动')).toBeVisible();
+  await expect(page.getByText('共 2 条活动')).toBeVisible();
   await page.getByRole('link', { name: '导入' }).click();
   await expect(page.getByLabel('导入活动 CSV')).toBeVisible();
   await page.getByRole('link', { name: '设置' }).click();
   await expect(page.getByLabel('最大心率')).toBeVisible();
+
+  expect(pageErrors).toEqual([]);
+});
+
+test('a completed planned workout can attach and swap its linked activity directly', async ({
+  page,
+}) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await page.goto('/calendar?month=2026-09');
+  await cleanupPlannedWorkouts(page);
+
+  // Make sure both real activities exist via the normal import flow.
+  await page.goto('/imports');
+  await page
+    .getByLabel('导入活动 CSV')
+    .setInputFiles({ name: 'public.csv', mimeType: 'text/csv', buffer: Buffer.from(matchingCsv) });
+  await page.getByRole('button', { name: '开始导入' }).first().click();
+  await page.getByLabel('导入活动 CSV').setInputFiles({
+    name: 'second.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(secondActivityCsv),
+  });
+  await page.getByRole('button', { name: '开始导入' }).first().click();
+
+  // Create a plan and complete it manually, without any linked activity.
+  await page.goto('/calendar?month=2026-09');
+  await page.getByRole('button', { name: '添加训练', exact: true }).click();
+  await page.getByLabel('日期').fill('2026-09-16');
+  await page.getByLabel('标题').fill('E2E 补充关联');
+  await page.getByRole('button', { name: '保存' }).click();
+  await page
+    .getByTitle(/E2E 补充关联（(待完成|已逾期)，点击编辑）/)
+    .first()
+    .click();
+  await page.getByRole('button', { name: '标记为已完成' }).click();
+  await expect(page.getByTestId('completion-status')).toHaveText('已完成');
+  await expect(page.getByText('已关联实际活动')).toHaveCount(0);
+
+  // Attach an activity directly while staying COMPLETED — no restore needed.
+  await page.getByLabel('补充关联活动', { exact: true }).selectOption({ index: 1 });
+  await page.getByRole('button', { name: '补充关联', exact: true }).click();
+  await expect(page.getByTestId('completion-status')).toHaveText('已完成');
+  await expect(page.getByText('已关联实际活动')).toBeVisible();
+  await expect(
+    page.locator('dialog').getByRole('link', { name: /公开合成跑步（2026-09-18/ }),
+  ).toBeVisible();
+
+  // Swap directly to the second activity; the status stays COMPLETED.
+  await page.getByLabel('更换关联活动', { exact: true }).selectOption({ index: 2 });
+  await page.getByRole('button', { name: '更换关联', exact: true }).click();
+  await expect(page.getByTestId('completion-status')).toHaveText('已完成');
+  await expect(
+    page.locator('dialog').getByRole('link', { name: /公开合成跑步二（2026-09-19/ }),
+  ).toBeVisible();
+
+  // A reload keeps the swapped link.
+  await page.reload();
+  await page.getByTitle('E2E 补充关联（已完成，点击编辑）').first().click();
+  await expect(page.getByTestId('completion-status')).toHaveText('已完成');
+  await expect(
+    page.locator('dialog').getByRole('link', { name: /公开合成跑步二（2026-09-19/ }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: '关闭' }).click();
+
+  // The original activities were never modified or deleted by the linking.
+  await page.goto('/activities');
+  await expect(page.getByText('公开合成跑步', { exact: true })).toBeVisible();
+  await expect(page.getByText('公开合成跑步二', { exact: true })).toBeVisible();
+  await page
+    .getByRole('link', { name: /公开合成跑步 2026-09-18/ })
+    .first()
+    .click();
+  await expect(page.getByRole('heading', { name: '公开合成跑步', exact: true })).toBeVisible();
+
+  // A conflict while another plan links the same activity still surfaces 409.
+  await page.goto('/calendar?month=2026-09');
+  await page.getByRole('button', { name: '添加训练', exact: true }).click();
+  await page.getByLabel('日期').fill('2026-09-15');
+  await page.getByLabel('标题').fill('E2E 冲突关联');
+  await page.getByRole('button', { name: '保存' }).click();
+  await page
+    .getByTitle(/E2E 冲突关联（(待完成|已逾期)，点击编辑）/)
+    .first()
+    .click();
+  await page.getByLabel('关联实际活动并完成', { exact: true }).selectOption({ index: 2 });
+  await page.getByRole('button', { name: '关联并完成' }).click();
+  await expect(page.getByTestId('completion-error')).toHaveText('该实际活动已关联其他计划训练');
 
   expect(pageErrors).toEqual([]);
 });
