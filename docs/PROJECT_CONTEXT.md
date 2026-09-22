@@ -54,8 +54,8 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
   - 最近 7 天 / 28 天概览：跑步次数、总距离、总移动时长、平均配速；仅统计 `activityType = RUN`。
   - 最近 12 个自然周跑量趋势：周一开始、含当前周、无活动周补零。
   - 最近活动：最多 5 条，链接到既有详情页。
-  - 统计口径：闭区间本地日期（“今天”由 athlete settings 的 timezoneOffsetMinutes 计算）；活动归属使用既有 `activities.local_date`；移动时长优先 `movingDurationSeconds`、回退 `durationSeconds`、缺失按 0；平均配速 = 总移动时长 / 总距离 × 1000，总距离为 0 时为 null。
-  - 聚合在 SQLite 按 `local_date` 分组完成（两条查询），无逐活动 sources N+1，不返回 samples。
+  - 统计口径：闭区间本地日期（“今天”由 athlete settings 的 timezoneOffsetMinutes 计算）；活动归属使用既有 `activities.local_date`；移动时长优先 `movingDurationSeconds`、回退 `durationSeconds`、缺失按 0；平均配速 = 总移动时长 / 总距离 × 1000，仅在总距离与总移动时长均为正时计算，否则为 null（时长缺失按 0 处理即返回 null，不会输出 0 配速）。
+  - 聚合在 SQLite 按 `local_date` 分组完成，固定三条查询（athlete settings、按日聚合、最近活动），查询数量与活动数量无关，无逐活动 sources N+1，不返回 samples。
 - Batch 2+（更广泛的跨活动趋势）尚未开始，范围需与 reviewer 确认。
 
 ### 冻结不做（跨里程碑有效）

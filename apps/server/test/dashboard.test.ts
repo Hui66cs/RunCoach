@@ -210,6 +210,32 @@ describe('dashboard aggregation', () => {
     expect(dashboard.last7Days.totalMovingDurationSeconds).toBe(300 + 500 + 0);
   });
 
+  it('returns null average pace when distance is positive but effective duration is missing or zero', () => {
+    createActivity(repository, fileStore, {
+      localDate: TODAY,
+      distanceMeters: 1000,
+      durationSeconds: null,
+      movingDurationSeconds: null,
+    });
+    createActivity(repository, fileStore, {
+      localDate: TODAY,
+      distanceMeters: 1000,
+      durationSeconds: null,
+      movingDurationSeconds: 0,
+    });
+    createActivity(repository, fileStore, {
+      localDate: TODAY,
+      distanceMeters: 1000,
+      durationSeconds: 0,
+      movingDurationSeconds: null,
+    });
+    const dashboard = repository.getDashboard(TODAY);
+    expect(dashboard.last7Days.runs).toBe(3);
+    expect(dashboard.last7Days.totalDistanceMeters).toBe(3000);
+    expect(dashboard.last7Days.totalMovingDurationSeconds).toBe(0);
+    expect(dashboard.last7Days.averagePaceSecondsPerKilometer).toBeNull();
+  });
+
   it('returns null average pace when total distance is zero', () => {
     createActivity(repository, fileStore, { localDate: TODAY, durationSeconds: 1800 });
     const dashboard = repository.getDashboard(TODAY);
@@ -356,5 +382,23 @@ describe('dashboard HTTP API', () => {
     expect(body.recentActivities).toHaveLength(1);
     expect(body.recentActivities[0]?.name).toBe('今日合成跑');
     expect(body.recentActivities[0]).not.toHaveProperty('samples');
+  });
+
+  it('serves 200 instead of 500 when runs have positive distance but no effective duration', async () => {
+    const today = localDateFromUtcTime(Date.now(), DEFAULT_OFFSET);
+    createActivity(repository, fileStore, {
+      localDate: today,
+      distanceMeters: 5000,
+      durationSeconds: null,
+      movingDurationSeconds: null,
+    });
+    const response = await app.inject({ method: 'GET', url: '/api/dashboard' });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<Record<string, unknown>>();
+    const parsed = dashboardResponseSchema.parse(body);
+    expect(parsed.last7Days.runs).toBe(1);
+    expect(parsed.last7Days.totalDistanceMeters).toBe(5000);
+    expect(parsed.last7Days.totalMovingDurationSeconds).toBe(0);
+    expect(parsed.last7Days.averagePaceSecondsPerKilometer).toBeNull();
   });
 });

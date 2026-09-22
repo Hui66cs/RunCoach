@@ -1126,8 +1126,11 @@ export class ActivityRepository {
         runs,
         totalDistanceMeters,
         totalMovingDurationSeconds,
+        // A meaningful pace needs both positive distance and positive
+        // effective moving duration; otherwise the schema's positive-or-null
+        // contract (and the UI) must receive null instead of 0.
         averagePaceSecondsPerKilometer:
-          totalDistanceMeters > 0
+          totalDistanceMeters > 0 && totalMovingDurationSeconds > 0
             ? (totalMovingDurationSeconds / totalDistanceMeters) * 1000
             : null,
       };

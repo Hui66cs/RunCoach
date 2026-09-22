@@ -107,9 +107,19 @@ function averagePaceOf(activity: {
   durationSeconds?: number | null | undefined;
 }): number | null {
   const duration = activity.movingDurationSeconds ?? activity.durationSeconds;
-  return activity.distanceMeters != null && duration != null && activity.distanceMeters > 0
-    ? (duration / activity.distanceMeters) * 1000
-    : null;
+  const distance = activity.distanceMeters;
+  // A meaningful pace needs both positive distance and positive effective
+  // duration; null/undefined/0 must render as "—" instead of 0:00/km.
+  if (
+    typeof distance !== 'number' ||
+    !Number.isFinite(distance) ||
+    distance <= 0 ||
+    typeof duration !== 'number' ||
+    !Number.isFinite(duration) ||
+    duration <= 0
+  )
+    return null;
+  return (duration / distance) * 1000;
 }
 
 function PeriodCard({ title, summary }: { title: string; summary: DashboardPeriodSummary }) {
