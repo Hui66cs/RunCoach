@@ -6,7 +6,8 @@
 // production repository code, and measures list/detail/series read paths.
 // It never reads or writes the developer's real data directory and always
 // cleans up after itself. The output is a human-readable summary plus a
-// structured JSON block; the exit code reflects success or failure.
+// structured JSON block built from the same measurements; the exit code
+// reflects success or failure.
 //
 // This benchmark is a baseline measurement tool, not a CI performance SLA.
 
@@ -46,6 +47,20 @@ const SCALES = [
 ];
 const SERIES_METRICS = ['pace', 'heartRate', 'gps'];
 const MAX_POINTS = 1000;
+const REQUIRED_JSON_FIELDS = ['meta', 'operations', 'validations', 'cleanupVerified'];
+// Every operation that must appear in the JSON output: [name, scale|null].
+const EXPECTED_OPERATIONS = [
+  ['createActivity', 'medium'],
+  ['createActivity', 'large'],
+  ['listActivitiesPage.firstPage', null],
+  ['listActivitiesPage.filtered', null],
+  ['getActivity', 'medium'],
+  ['getActivity', 'large'],
+  ['getActivitySeries.fullRange', 'medium'],
+  ['getActivitySeries.fullRange', 'large'],
+  ['getActivitySeries.ranged10Percent', 'medium'],
+  ['getActivitySeries.ranged10Percent', 'large'],
+];
 
 const median = (values) => {
   const sorted = [...values].sort((a, b) => a - b);
@@ -150,33 +165,20 @@ function measure(runs, operation) {
   };
 }
 
-function assert(condition, message, failures) {
-  if (!condition) failures.push(message);
+// One uncounted warmup run (its result is returned for correctness checks),
+// then `runs` measured runs.
+function warmupAndMeasure(runs, operation) {
+  tracker.reset();
+  const warmupResult = operation();
+  return { stats: measure(runs, operation), warmupResult };
 }
-
-const failures = [];
-const operations = [];
-const trackerByDb = new WeakMap();
-
-function track(database) {
-  tracker = createQueryTracker(database.sqlite);
-  trackerByDb.set(database, tracker);
-  return tracker;
-}
-
-let tracker = null;
-// measure() closes over the module-level tracker; set it after the DB opens.
-function measureOn(database, runs, operation) {
-  tracker = trackerByDb.get(database);
-  return measure(runs, operation);
-}
-
-// --- main ---
 
 const startedAt = new Date().toISOString();
 const totalStart = performance.now();
 let directory = null;
 let database = null;
+let tracker = null;
+
 const result = {
   meta: {
     node: process.version,
@@ -184,7 +186,7 @@ const result = {
     osRelease: os.release(),
     cpu: os.cpus()[0]?.model ?? 'unknown',
     startedAt,
-    benchmarkVersion: 1,
+    benchmarkVersion: 2,
     runsPerRead: READ_RUNS,
     runsPerWrite: WRITE_RUNS,
     scales: SCALES.map((scale) => scale.sampleCount),
@@ -194,20 +196,28 @@ const result = {
       '通过包装 better-sqlite3 Database.prepare 统计预处理语句次数；事务的 BEGIN/COMMIT 等 exec 调用不计入。',
   },
   operations: [],
-  validations: { passed: [], failed: failures },
+  validations: { checks: [], allPassed: true },
   cleanupVerified: false,
 };
+
+function check(name, passed, detail = null) {
+  result.validations.checks.push(passed ? { name, passed: true } : { name, passed: false, detail });
+  return Boolean(passed);
+}
 
 try {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'runcoach-benchmark-'));
   database = openDatabase(path.join(directory, 'benchmark.db'));
   applyMigrations(database.sqlite, resolveMigrationsDirectory());
-  track(database);
+  tracker = createQueryTracker(database.sqlite);
   const repository = new ActivityRepository(database.db);
 
-  // 1. Write path: create synthetic activities through the real repository.
+  // 1. Write path: one warmup creation per scale (runIndex 0, not measured),
+  //    then WRITE_RUNS measured creations through the real repository.
   const activityIds = {};
   for (const scale of SCALES) {
+    const timings = [];
+    const sqlCounts = [];
     for (let runIndex = 0; runIndex <= WRITE_RUNS; runIndex += 1) {
       const source = prepareSource(repository, `${scale.name}-${runIndex}`);
       const normalized = syntheticActivity({
@@ -215,7 +225,6 @@ try {
         sampleCount: scale.sampleCount,
         runIndex,
       });
-      const isMeasured = runIndex > 0;
       tracker.reset();
       const start = performance.now();
       const created = repository.createActivityFromSource({
@@ -226,50 +235,42 @@ try {
         importItemId: source.itemId,
       });
       const elapsed = performance.now() - start;
-      if (isMeasured) {
-        let entry = operations.find(
-          (operation) => operation.name === 'createActivity' && operation.scale === scale.name,
-        );
-        if (entry === undefined) {
-          entry = {
-            name: 'createActivity',
-            scale: scale.name,
-            sampleCount: scale.sampleCount,
-            timings: [],
-            sqlQueries: [],
-          };
-          operations.push(entry);
-        }
-        entry.timings.push(elapsed);
-        entry.sqlQueries.push(tracker.count);
+      if (runIndex > 0) {
+        timings.push(elapsed);
+        sqlCounts.push(tracker.count);
       }
       if (runIndex === WRITE_RUNS) activityIds[scale.name] = created.activityId;
     }
+    result.operations.push({
+      name: 'createActivity',
+      scale: scale.name,
+      sampleCount: scale.sampleCount,
+      medianMs: median(timings),
+      minMs: Math.min(...timings),
+      maxMs: Math.max(...timings),
+      sqlQueries: median(sqlCounts),
+    });
   }
-  for (const operation of operations.filter((entry) => entry.name === 'createActivity')) {
-    operation.medianMs = median(operation.timings);
-    operation.minMs = Math.min(...operation.timings);
-    operation.maxMs = Math.max(...operation.timings);
-    operation.sqlQueries = median(operation.sqlQueries);
-    delete operation.timings;
-  }
-
-  const listQuery = repository.listActivitiesPage({ limit: 30 });
-  assert(
-    listQuery.total >= SCALES.length * (WRITE_RUNS + 1),
-    'listActivitiesPage total 不符合预期',
-    failures,
-  );
-  assert(listQuery.items.length <= 30, 'listActivitiesPage 首页超过 limit', failures);
 
   // 2. listActivitiesPage: first page and common filters.
-  operations.push({
-    name: 'listActivitiesPage.firstPage',
-    ...measureOn(database, READ_RUNS, () => repository.listActivitiesPage({ limit: 30 })),
-  });
-  operations.push({
-    name: 'listActivitiesPage.filtered',
-    ...measureOn(database, READ_RUNS, () =>
+  {
+    const { stats, warmupResult } = warmupAndMeasure(READ_RUNS, () =>
+      repository.listActivitiesPage({ limit: 30 }),
+    );
+    check(
+      'listActivitiesPage.total',
+      warmupResult.total >= SCALES.length * (WRITE_RUNS + 1),
+      `total=${warmupResult.total}`,
+    );
+    check(
+      'listActivitiesPage.firstPageLimit',
+      warmupResult.items.length <= 30,
+      `items=${warmupResult.items.length}`,
+    );
+    result.operations.push({ name: 'listActivitiesPage.firstPage', ...stats });
+  }
+  {
+    const { stats } = warmupAndMeasure(READ_RUNS, () =>
       repository.listActivitiesPage({
         limit: 30,
         dateFrom: '2026-01-01',
@@ -277,63 +278,74 @@ try {
         activityType: 'RUN',
         sourceType: 'FIT',
       }),
-    ),
-  });
+    );
+    result.operations.push({ name: 'listActivitiesPage.filtered', ...stats });
+  }
 
   // 3. getActivity on both scales.
   for (const scale of SCALES) {
-    const detail = repository.getActivity(activityIds[scale.name]);
-    assert(detail !== null, `getActivity(${scale.name}) 返回空`, failures);
-    assert(!('samples' in detail), `getActivity(${scale.name}) 响应包含 samples`, failures);
-    operations.push({
+    const { stats, warmupResult } = warmupAndMeasure(READ_RUNS, () =>
+      repository.getActivity(activityIds[scale.name]),
+    );
+    check(`getActivity.${scale.name}.returns`, warmupResult !== null);
+    check(
+      `getActivity.${scale.name}.noSamples`,
+      warmupResult !== null && !('samples' in warmupResult),
+    );
+    result.operations.push({
       name: 'getActivity',
       scale: scale.name,
       sampleCount: scale.sampleCount,
-      ...measureOn(database, READ_RUNS, () => repository.getActivity(activityIds[scale.name])),
+      ...stats,
     });
   }
 
   // 4. Full-range series on both scales.
   for (const scale of SCALES) {
     const query = { metrics: SERIES_METRICS, maxPoints: MAX_POINTS };
-    const series = repository.getActivitySeries(activityIds[scale.name], query);
-    assert(series !== null, `getActivitySeries(${scale.name}) 返回空`, failures);
-    assert(series.returnedPoints <= MAX_POINTS, `${scale.name} series 超过 maxPoints`, failures);
-    assert(
-      series.totalPoints === scale.sampleCount,
-      `${scale.name} series totalPoints 错误`,
-      failures,
+    const { stats, warmupResult: series } = warmupAndMeasure(READ_RUNS, () =>
+      repository.getActivitySeries(activityIds[scale.name], query),
     );
-    assert(
-      series.points[0].sequence === 0 && series.points.at(-1).sequence === scale.sampleCount - 1,
-      `${scale.name} series 未保留首尾点`,
-      failures,
-    );
-    assert(
-      series.points.every(
-        (point, index) => index === 0 || point.sequence > series.points[index - 1].sequence,
-      ),
-      `${scale.name} series 顺序错误`,
-      failures,
-    );
-    assert(
-      series.points.every(
-        (point) =>
-          'paceSecondsPerKilometer' in point &&
-          'heartRateBpm' in point &&
-          'latitudeDegrees' in point &&
-          'longitudeDegrees' in point,
-      ),
-      `${scale.name} series 缺少请求字段`,
-      failures,
-    );
-    operations.push({
+    check(`series.${scale.name}.fullRange.returns`, series !== null);
+    if (series !== null) {
+      check(
+        `series.${scale.name}.fullRange.bounded`,
+        series.returnedPoints <= MAX_POINTS,
+        `returnedPoints=${series.returnedPoints}`,
+      );
+      check(
+        `series.${scale.name}.fullRange.totalPoints`,
+        series.totalPoints === scale.sampleCount,
+        `totalPoints=${series.totalPoints}`,
+      );
+      const first = series.points[0];
+      const last = series.points.at(-1);
+      check(
+        `series.${scale.name}.fullRange.endpoints`,
+        first?.sequence === 0 && last?.sequence === scale.sampleCount - 1,
+      );
+      check(
+        `series.${scale.name}.fullRange.ordered`,
+        series.points.every(
+          (point, index) => index === 0 || point.sequence > series.points[index - 1].sequence,
+        ),
+      );
+      check(
+        `series.${scale.name}.fullRange.requestedFields`,
+        series.points.every(
+          (point) =>
+            'paceSecondsPerKilometer' in point &&
+            'heartRateBpm' in point &&
+            'latitudeDegrees' in point &&
+            'longitudeDegrees' in point,
+        ),
+      );
+    }
+    result.operations.push({
       name: 'getActivitySeries.fullRange',
       scale: scale.name,
       sampleCount: scale.sampleCount,
-      ...measureOn(database, READ_RUNS, () =>
-        repository.getActivitySeries(activityIds[scale.name], query),
-      ),
+      ...stats,
     });
   }
 
@@ -343,68 +355,99 @@ try {
     const from = Math.floor(scale.sampleCount * 0.45);
     const to = from + span;
     const query = { metrics: SERIES_METRICS, from, to, maxPoints: MAX_POINTS };
-    const series = repository.getActivitySeries(activityIds[scale.name], query);
-    assert(series !== null, `ranged series(${scale.name}) 返回空`, failures);
-    assert(
-      series.returnedPoints <= MAX_POINTS,
-      `${scale.name} ranged series 超过 maxPoints`,
-      failures,
+    const { stats, warmupResult: series } = warmupAndMeasure(READ_RUNS, () =>
+      repository.getActivitySeries(activityIds[scale.name], query),
     );
-    assert(
-      series.totalPoints === to - from + 1,
-      `${scale.name} ranged series totalPoints 与 SQL 范围不符`,
-      failures,
-    );
-    assert(
-      series.points.every((point) => point.elapsedSeconds >= from && point.elapsedSeconds <= to),
-      `${scale.name} ranged series 超出 from/to`,
-      failures,
-    );
-    assert(
-      series.points[0].sequence === from && series.points.at(-1).sequence === to,
-      `${scale.name} ranged series 未保留范围内首尾点`,
-      failures,
-    );
-    operations.push({
+    check(`series.${scale.name}.ranged.returns`, series !== null);
+    if (series !== null) {
+      check(
+        `series.${scale.name}.ranged.bounded`,
+        series.returnedPoints <= MAX_POINTS,
+        `returnedPoints=${series.returnedPoints}`,
+      );
+      check(
+        `series.${scale.name}.ranged.totalPoints`,
+        series.totalPoints === to - from + 1,
+        `totalPoints=${series.totalPoints}`,
+      );
+      check(
+        `series.${scale.name}.ranged.withinRange`,
+        series.points.every((point) => point.elapsedSeconds >= from && point.elapsedSeconds <= to),
+      );
+      check(
+        `series.${scale.name}.ranged.endpoints`,
+        series.points[0]?.sequence === from && series.points.at(-1)?.sequence === to,
+      );
+    }
+    result.operations.push({
       name: 'getActivitySeries.ranged10Percent',
       scale: scale.name,
       sampleCount: scale.sampleCount,
       from,
       to,
-      ...measureOn(database, READ_RUNS, () =>
-        repository.getActivitySeries(activityIds[scale.name], query),
-      ),
+      ...stats,
     });
   }
 
   result.totalDurationMs = Math.round(performance.now() - totalStart);
 } catch (error) {
-  failures.push(`benchmark 异常: ${error?.stack ?? error}`);
+  check('benchmark.exception', false, String(error?.stack ?? error));
 } finally {
   try {
     database?.close();
-  } catch {
-    failures.push('关闭数据库失败');
+  } catch (error) {
+    check('database.close', false, String(error?.message ?? error));
   }
   if (directory !== null) {
     try {
       fs.rmSync(directory, { recursive: true, force: true });
       result.cleanupVerified = !fs.existsSync(directory);
-      if (!result.cleanupVerified) failures.push('临时目录未清理');
+      check('cleanup.verified', result.cleanupVerified, directory);
     } catch (error) {
-      failures.push(`清理临时目录失败: ${error?.message ?? error}`);
+      check('cleanup.verified', false, String(error?.message ?? error));
     }
+  } else {
+    check('cleanup.verified', false, '临时目录从未创建');
   }
 }
 
-const requiredJsonFields = ['meta', 'operations', 'validations', 'cleanupVerified'];
-for (const field of requiredJsonFields) {
-  if (!(field in result)) failures.push(`输出 JSON 缺少字段 ${field}`);
+// Structural self-validation: the JSON output must be complete and sane.
+check(
+  'json.requiredFields',
+  REQUIRED_JSON_FIELDS.every((field) => field in result),
+);
+check(
+  'json.operationsCount',
+  result.operations.length === EXPECTED_OPERATIONS.length,
+  `got ${result.operations.length}`,
+);
+for (const [name, scale] of EXPECTED_OPERATIONS) {
+  const label = scale === null ? name : `${name}.${scale}`;
+  const entry = result.operations.find(
+    (operation) =>
+      operation.name === name &&
+      (scale === null ? operation.scale === undefined : operation.scale === scale),
+  );
+  if (!check(`operations.${label}.present`, entry !== undefined)) continue;
+  const finiteNonNegative = (value) =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  check(
+    `operations.${label}.timingsSane`,
+    finiteNonNegative(entry.medianMs) &&
+      finiteNonNegative(entry.minMs) &&
+      finiteNonNegative(entry.maxMs) &&
+      entry.minMs <= entry.medianMs &&
+      entry.medianMs <= entry.maxMs,
+    JSON.stringify({ minMs: entry.minMs, medianMs: entry.medianMs, maxMs: entry.maxMs }),
+  );
 }
+result.validations.allPassed = result.validations.checks.every((entry) => entry.passed);
 
-if (failures.length > 0) {
+if (!result.validations.allPassed) {
   console.error('\n=== benchmark 校验失败 ===');
-  for (const failure of failures) console.error(`- ${failure}`);
+  for (const entry of result.validations.checks) {
+    if (!entry.passed) console.error(`- ${entry.name}${entry.detail ? `: ${entry.detail}` : ''}`);
+  }
   process.exit(1);
 }
 
@@ -412,7 +455,7 @@ console.log('=== RunCoach M2 performance baseline ===');
 console.log(`node ${result.meta.node} on ${result.meta.platform} (${result.meta.cpu})`);
 console.log(`started at ${result.meta.startedAt}, total ${Math.round(result.totalDurationMs)} ms`);
 console.log('');
-for (const operation of operations) {
+for (const operation of result.operations) {
   const scope =
     operation.scale === undefined ? '' : ` [${operation.scale} ${operation.sampleCount}]`;
   const range = operation.from === undefined ? '' : ` (${operation.from}..${operation.to})`;
@@ -425,5 +468,8 @@ for (const operation of operations) {
   );
 }
 console.log('');
+console.log(
+  `validations: ${result.validations.checks.length} checks, allPassed=${result.validations.allPassed}`,
+);
 console.log('--- JSON ---');
 console.log(JSON.stringify(result, null, 2));
