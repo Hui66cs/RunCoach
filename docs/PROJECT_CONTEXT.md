@@ -67,14 +67,24 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
 
 ### 当前里程碑 M4（训练日历与本地训练计划，进行中）
 
-- Batch 1 已实现（等待 reviewer 验收）：
+- Batch 1 已通过 reviewer 验收：
   - `0003_training_calendar.sql`（forward-only）：新增 `planned_workouts` 表（id、scheduled_local_date、workout_type、title、notes、target_distance_meters、target_duration_seconds、created_at、updated_at）与 `scheduled_local_date` 索引；不改 activities，不复制实际活动。
-  - `GET /api/calendar?from&to`：闭区间（最多 93 天），同时返回计划训练与有界实际活动摘要（无 samples/laps/sources），SQL 内过滤、固定两条查询。
+  - `GET /api/calendar?from&to`：闭区间（最多 93 天），同时返回计划训练与有界实际活动摘要（无 samples/laps/sources），SQL 内过滤、固定查询。
   - `POST /api/planned-workouts`、`PATCH /api/planned-workouts/:id`（至少一个字段，更新 updatedAt）、`DELETE /api/planned-workouts/:id`（204；只删 planned workout，不影响活动或导入数据）。
   - 训练类型：EASY_RUN、LONG_RUN、TEMPO_RUN、INTERVAL_RUN、RECOVERY_RUN、RACE、STRENGTH、REST、OTHER；REST/STRENGTH/OTHER 允许无目标，跑步类型本批也不强制目标。
   - 单位语义：API 存储米、秒；前端输入 km 与小时/分钟，提交前换算；标题 trim 后 1–120 字符；notes ≤2000；目标必须是有限正数或空。
-  - `/calendar` 月视图：周一为每周第一天，含相邻月补齐（35 或 42 天网格），月份保存在 URL（`?month=YYYY-MM`），非法回退当前月；窄屏为 agenda 列表；计划（绿）与实际活动（蓝）视觉区分，实际活动只读并链接到详情。
-- Batch 2 尚未开始：计划完成状态、计划与实际活动关联、执行率与周汇总。
+  - `/calendar` 月视图：周一为每周第一天，含相邻月补齐（35 或 42 天网格），月份保存在 URL（`?month=YYYY-MM`），非法回退当前月；窄屏为 agenda 列表；计划与实际活动视觉区分，实际活动只读并链接到详情。
+- Batch 2 已实现（等待 reviewer 验收）：计划完成状态、人工一对一关联、执行率与周汇总。
+  - `0004_plan_completion.sql`（forward-only）：`planned_workouts` 增加 `completion_status TEXT NOT NULL DEFAULT 'PLANNED'` 与 `linked_activity_id TEXT NULL REFERENCES activities(id) ON DELETE SET NULL`；新增 `linked_activity_id` 部分唯一索引（一个 activity 最多关联一个计划，多个 NULL 允许）与 `(scheduled_local_date, completion_status)` 汇总索引。不改 0000–0003；旧行升级后为 `PLANNED`；migration 重复执行幂等。
+  - 状态模型：`PLANNED | COMPLETED | SKIPPED`。关联活动必须变为 `COMPLETED`；`COMPLETED` 允许无关联（人工完成）；改为 `PLANNED`/`SKIPPED` 必须清除关联；可更换或解除关联；删除计划只删计划及关联，不触碰活动、source、sample、lap 或导入历史；底层删除活动时外键 `ON DELETE SET NULL`，`COMPLETED` 保留并退化为人工完成。“已逾期”是 `PLANNED + scheduledLocalDate < 今天` 的派生显示，不是数据库状态。
+  - 关联是一对一人工操作：一个计划最多关联一个活动、一个活动最多关联一个计划；不做自动匹配、自动推荐或模糊匹配；同一活动已被其他计划关联时返回 `409 ACTIVITY_ALREADY_LINKED`，不静默抢占。本批不支持一计划多活动或一活动拆多计划。
+  - `PATCH /api/planned-workouts/:workoutId/completion`：discriminated union 请求体（`PLANNED` / `SKIPPED` / `COMPLETED + linkedActivityId: string|null`），状态与关联在同一事务内修改；计划不存在 404，活动不存在 404 `ACTIVITY_NOT_FOUND`；不修改 activity 本身。普通 PATCH 继续只负责标题/日期/目标等元数据。
+  - `GET /api/training-summary?from&to`：闭区间、`from <= to`、最多 93 天否则 400。“今天”由 athlete settings 的 `timezoneOffsetMinutes` 计算，不使用服务器 UTC 日期。返回 `from/to/generatedForLocalDate/timezoneOffsetMinutes/summary/weeklyRollups`；summary 与每个周 rollup 含 plannedCount、completedCount、linkedCompletedCount、skippedCount、overdueCount、upcomingCount、eligibleCount、adherenceRate。固定口径：`eligibleCount = completedCount + skippedCount + overdueCount`；`adherenceRate = completedCount / eligibleCount`（0–1 小数，前端格式化；eligible 为 0 时为 null，不输出 0/NaN/Infinity）。今天的 PLANNED 计入 upcoming，不算 overdue；未来计划不进入 eligible、不降低执行率；手工完成与关联完成都计入 completed；所有训练类型（含 REST、STRENGTH）同口径。
+  - 周汇总：周一为一周第一天；覆盖所有与范围相交的自然周（周首尾标签可为完整自然周，但只统计 `[from, to]` 内的计划）；无计划周零填充；旧→新稳定排序。
+  - 性能：聚合在 SQLite 按 `(scheduled_local_date, completion_status)` 分组完成，查询数量与计划/活动数量无关，无 N+1，不读取 samples；calendar 即使携带关联活动摘要也保持固定查询数（计划、范围内活动、至多一次按 id 批量取关联活动摘要）。
+  - Calendar 投影：范围内的计划携带 `linkedActivity: CalendarActivitySummary | null` 有界摘要（无 samples/laps/sources）；关联活动即使日期在查询范围外，也随范围内计划返回；`activities` 数组仍只含范围内活动。
+  - 前端：计划条目显示文字 badge（待完成/已完成/已跳过/已逾期，其中逾期为派生显示）并用样式区分；编辑对话框提供 标记为已完成、关联实际活动并完成（候选复用当前日历范围内已加载活动，展示日期/名称/类型/距离/时长）、标记为已跳过、恢复为待完成、解除活动关联；已关联活动显示摘要并可跳转详情；409 显示可读错误；completion 与 metadata 保存互不覆盖；mutation 后刷新 calendar 与 training-summary 查询。月度执行率只按真实月首到月末请求（不含网格补位日期），展示本月计划数、已完成数、已跳过/逾期数、执行率与按周汇总紧凑表格，含 loading/error/empty 与 `adherenceRate = null`（“暂无可计算计划”）状态；窄屏用紧凑列表，不横向溢出、不依赖 hover。
+  - 本批不做：自动匹配建议、拖拽关联、批量完成、多活动关联、按距离/时间/标题自动判断完成。
 
 ### 冻结不做（跨里程碑有效）
 
@@ -123,7 +133,7 @@ RunCoach/
 │  ├─ PROJECT_CONTEXT.md
 │  └─ adr/                      # FIT decoder、SQLite driver、导入身份/决议 ADR
 ├─ apps/server/
-│  ├─ drizzle/                  # 0000 initial、0001 import hardening、0002 activity analysis
+│  ├─ drizzle/                  # 0000 initial、0001 import hardening、0002 activity analysis、0003 training calendar、0004 plan completion
 │  └─ src/
 │     ├─ app.ts                 # Fastify 路由和输入校验
 │     ├─ config.ts              # 本地路径、端口、时区 offset、上传上限
@@ -180,27 +190,29 @@ RunCoach/
 
 ### 当前 HTTP API
 
-| 方法与路径                                | 当前行为                                                                                          |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `GET /api/health`                         | 健康检查                                                                                          |
-| `GET /api/dashboard`                      | 有界 Dashboard 聚合：7/28 天概览、12 自然周跑量、最近 5 条活动；不返回 samples，无 N+1            |
-| `GET /api/trends`                         | 有界跨活动趋势：`weeks=12\|26\|52`（非法 400），周跑量/次数/配速/加权心率；不返回 samples，无 N+1 |
-| `GET /api/calendar`                       | 闭区间日历投影（≤93 天）：计划训练 + 有界实际活动摘要；SQL 过滤，固定两条查询                     |
-| `POST /api/planned-workouts`              | 创建计划训练，返回持久化后的完整记录                                                              |
-| `PATCH /api/planned-workouts/:workoutId`  | 局部更新（至少一个字段），刷新 updatedAt；不存在 404                                              |
-| `DELETE /api/planned-workouts/:workoutId` | 删除计划训练（204）；不影响活动或导入数据                                                         |
-| `GET /api/activities`                     | 游标分页活动列表；支持 `limit/cursor/dateFrom/dateTo/activityType/sourceType/q`，无 N+1           |
-| `GET /api/activities/:activityId`         | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples**     |
-| `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                                               |
-| `GET /api/activities/:activityId/series`  | 有界时序：`metrics/from/to/maxPoints`，SQL 范围过滤 + 服务端确定性降采样，不返回完整 samples      |
-| `GET /api/settings/athlete`               | 返回单行运动员设置                                                                                |
-| `PATCH /api/settings/athlete`             | 局部更新运动员设置（最大/静息/阈值心率、时区 offset 等），至少一个字段                            |
-| `POST /api/imports/csv`                   | 单文件 multipart CSV 导入                                                                         |
-| `POST /api/imports/fit`                   | 单文件 multipart FIT 导入                                                                         |
-| `GET /api/imports/pending?limit&cursor`   | 待确认项游标分页                                                                                  |
-| `GET /api/imports/history?limit&cursor`   | 导入 job 历史游标分页                                                                             |
-| `GET /api/imports/items/:itemId`          | 获取 pending 详情或已完成 item 摘要                                                               |
-| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP`                                                                    |
+| 方法与路径                                          | 当前行为                                                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `GET /api/health`                                   | 健康检查                                                                                                 |
+| `GET /api/dashboard`                                | 有界 Dashboard 聚合：7/28 天概览、12 自然周跑量、最近 5 条活动；不返回 samples，无 N+1                   |
+| `GET /api/trends`                                   | 有界跨活动趋势：`weeks=12\|26\|52`（非法 400），周跑量/次数/配速/加权心率；不返回 samples，无 N+1        |
+| `GET /api/calendar`                                 | 闭区间日历投影（≤93 天）：计划训练（含 `linkedActivity` 有界摘要）+ 有界实际活动摘要；SQL 过滤，固定查询 |
+| `GET /api/training-summary`                         | 闭区间（≤93 天）计划执行汇总：分类计数、执行率（eligible 为 0 时 null）与周一起始零填充周汇总；无 N+1    |
+| `POST /api/planned-workouts`                        | 创建计划训练，返回持久化后的完整记录                                                                     |
+| `PATCH /api/planned-workouts/:workoutId`            | 局部更新元数据（至少一个字段），刷新 updatedAt；不存在 404                                               |
+| `PATCH /api/planned-workouts/:workoutId/completion` | 修改完成状态并事务性维护一对一关联；404 `ACTIVITY_NOT_FOUND`、409 `ACTIVITY_ALREADY_LINKED`              |
+| `DELETE /api/planned-workouts/:workoutId`           | 删除计划训练（204）；不影响活动或导入数据，同时解除关联                                                  |
+| `GET /api/activities`                               | 游标分页活动列表；支持 `limit/cursor/dateFrom/dateTo/activityType/sourceType/q`，无 N+1                  |
+| `GET /api/activities/:activityId`                   | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples**            |
+| `PATCH /api/activities/:activityId`                 | 修改名称/备注并标记 USER provenance                                                                      |
+| `GET /api/activities/:activityId/series`            | 有界时序：`metrics/from/to/maxPoints`，SQL 范围过滤 + 服务端确定性降采样，不返回完整 samples             |
+| `GET /api/settings/athlete`                         | 返回单行运动员设置                                                                                       |
+| `PATCH /api/settings/athlete`                       | 局部更新运动员设置（最大/静息/阈值心率、时区 offset 等），至少一个字段                                   |
+| `POST /api/imports/csv`                             | 单文件 multipart CSV 导入                                                                                |
+| `POST /api/imports/fit`                             | 单文件 multipart FIT 导入                                                                                |
+| `GET /api/imports/pending?limit&cursor`             | 待确认项游标分页                                                                                         |
+| `GET /api/imports/history?limit&cursor`             | 导入 job 历史游标分页                                                                                    |
+| `GET /api/imports/items/:itemId`                    | 获取 pending 详情或已完成 item 摘要                                                                      |
+| `POST /api/imports/items/:itemId/resolve`           | `ATTACH`、`CREATE_NEW`、`SKIP`                                                                           |
 
 ### 模块边界
 
@@ -343,6 +355,7 @@ UI 已是正式路由应用：`/activities`（可分页筛选列表）、`/activ
 - CREATE_NEW；相同动作幂等、不同动作 replay 冲突。
 - stale candidate 保持可重试。
 - legacy pending candidate 缺 activity version 时重新匹配验证。
+- M4 计划完成（`plan-completion.test.ts`）：0003→0004 前向迁移与幂等、唯一关联约束与 `ON DELETE SET NULL`、completion 全部状态转换与 404/409 错误码、删除计划不影响活动/导入历史、关库重开持久性、training summary 分类/时区/周边界/93 天上限/固定查询数、calendar 关联活动投影（范围外仍返回、无 samples/laps/sources、固定查询数）。
 
 ### HTTP integration
 
@@ -356,8 +369,9 @@ UI 已是正式路由应用：`/activities`（可分页筛选列表）、`/activ
 
 1. `upgrade.spec.ts`：页面选择 CSV、导入；再选择 FIT；确认 CSV + FIT、lap、曲线；修改名称/备注；刷新后仍存在。
 2. `pending.spec.ts`：制造歧义候选；进入待确认；查看时间/距离/时长差；选择候选并确认 ATTACH；pending 数归零。
+3. `calendar.spec.ts`：固定 `2026-09` fixture 月份，创建计划并编辑目标、导入实际活动、将计划关联活动并完成（显示已完成 badge 与关联摘要）、执行率/周汇总变化、reload 后关联保留、409 冲突错误展示、跳过与恢复待完成、活动详情可达、删除计划不影响实际活动；测试开始时通过 API 清理历史计划以保证可重复运行。
 
-当前 E2E 已覆盖 M2 正式路由（列表/筛选/详情直达、名称备注编辑、图表切换、设置驱动的心率区间）与导入闭环；尚未覆盖 CREATE_NEW、SKIP、history 展开、分页和错误路径。
+当前 E2E 已覆盖 M2 正式路由（列表/筛选/详情直达、名称备注编辑、图表切换、设置驱动的心率区间）、导入闭环与 M4 日历完成状态/关联/汇总流程；尚未覆盖 CREATE_NEW、SKIP、history 展开、分页和错误路径。
 
 ## 13. ECharts 与前端工程优化现状
 
@@ -408,7 +422,7 @@ M2 已完成：正式 router、页面级组件拆分（pages/）、统一格式�
 - 暂无删除活动、撤销误合并、备份/恢复。
 - 页面级错误边界仍不是正式能力。
 - Garmin FIT SDK 的许可证适用于当前私有/个人阶段；任何重新分发前必须重新评估，当前不支持正式 distribution。
-- `0001_import_hardening.sql`、`0002_activity_analysis.sql` 均为 forward-only；升级旧数据前应备份 data directory。
+- `0001_import_hardening.sql`、`0002_activity_analysis.sql`、`0003_training_calendar.sql`、`0004_plan_completion.sql` 均为 forward-only；升级旧数据前应备份 data directory。
 
 ## 16. M1 最终验收状态
 

@@ -9,8 +9,11 @@ import type {
   CalendarResponse,
   DashboardResponse,
   PlannedWorkout,
+  PlannedWorkoutCompletionPatch,
   PlannedWorkoutCreate,
   PlannedWorkoutPatch,
+  TrainingSummaryQuery,
+  TrainingSummaryResponse,
   TrendsQuery,
   TrendsResponse,
 } from '@runcoach/shared';
@@ -53,6 +56,10 @@ export function getCalendarRange(query: CalendarQuery): Promise<CalendarResponse
   const params = new URLSearchParams({ from: query.from, to: query.to });
   return request(`/api/calendar?${params.toString()}`);
 }
+export function getTrainingSummary(query: TrainingSummaryQuery): Promise<TrainingSummaryResponse> {
+  const params = new URLSearchParams({ from: query.from, to: query.to });
+  return request(`/api/training-summary?${params.toString()}`);
+}
 export function createPlannedWorkout(body: PlannedWorkoutCreate): Promise<PlannedWorkout> {
   return request('/api/planned-workouts', {
     method: 'POST',
@@ -65,6 +72,16 @@ export function updatePlannedWorkout(
   patch: PlannedWorkoutPatch,
 ): Promise<PlannedWorkout> {
   return request(`/api/planned-workouts/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
+export function updatePlannedWorkoutCompletion(
+  id: string,
+  patch: PlannedWorkoutCompletionPatch,
+): Promise<PlannedWorkout> {
+  return request(`/api/planned-workouts/${id}/completion`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),

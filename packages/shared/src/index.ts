@@ -483,6 +483,9 @@ export const plannedWorkoutTypeSchema = z.enum([
 ]);
 export type PlannedWorkoutType = z.infer<typeof plannedWorkoutTypeSchema>;
 
+export const plannedWorkoutCompletionStatusSchema = z.enum(['PLANNED', 'COMPLETED', 'SKIPPED']);
+export type PlannedWorkoutCompletionStatus = z.infer<typeof plannedWorkoutCompletionStatusSchema>;
+
 export const plannedWorkoutSchema = z.object({
   id: z.string().uuid(),
   scheduledLocalDate: z.iso.date(),
@@ -491,10 +494,27 @@ export const plannedWorkoutSchema = z.object({
   notes: z.string().max(2000).nullable(),
   targetDistanceMeters: z.number().finite().positive().nullable(),
   targetDurationSeconds: z.number().finite().positive().nullable(),
+  completionStatus: plannedWorkoutCompletionStatusSchema,
+  linkedActivityId: z.string().uuid().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
 export type PlannedWorkout = z.infer<typeof plannedWorkoutSchema>;
+
+/**
+ * Completion-only patch. A COMPLETED request must state explicitly whether an
+ * activity is linked; PLANNED/SKIPPED always clear the link server-side, so
+ * clients cannot submit contradictory combinations.
+ */
+export const plannedWorkoutCompletionPatchSchema = z.discriminatedUnion('completionStatus', [
+  z.strictObject({ completionStatus: z.literal('PLANNED') }),
+  z.strictObject({ completionStatus: z.literal('SKIPPED') }),
+  z.strictObject({
+    completionStatus: z.literal('COMPLETED'),
+    linkedActivityId: z.string().uuid().nullable(),
+  }),
+]);
+export type PlannedWorkoutCompletionPatch = z.infer<typeof plannedWorkoutCompletionPatchSchema>;
 
 const targetDistanceMetersSchema = z.number().finite().positive().nullable().optional();
 const targetDurationSecondsSchema = z.number().finite().positive().nullable().optional();
@@ -553,13 +573,68 @@ export const calendarActivitySummarySchema = z.object({
 });
 export type CalendarActivitySummary = z.infer<typeof calendarActivitySummarySchema>;
 
+/**
+ * Calendar projection of a planned workout. `linkedActivity` is a bounded
+ * summary of the linked real activity — returned even when that activity's
+ * own date falls outside the queried calendar range, because the plan is in
+ * range.
+ */
+export const calendarPlannedWorkoutSchema = plannedWorkoutSchema.extend({
+  linkedActivity: calendarActivitySummarySchema.nullable(),
+});
+export type CalendarPlannedWorkout = z.infer<typeof calendarPlannedWorkoutSchema>;
+
 export const calendarResponseSchema = z.object({
   from: z.iso.date(),
   to: z.iso.date(),
-  plannedWorkouts: z.array(plannedWorkoutSchema),
+  plannedWorkouts: z.array(calendarPlannedWorkoutSchema),
   activities: z.array(calendarActivitySummarySchema),
 });
 export type CalendarResponse = z.infer<typeof calendarResponseSchema>;
+
+export const trainingSummaryQuerySchema = z
+  .object({
+    from: z.iso.date(),
+    to: z.iso.date(),
+  })
+  .refine((value) => value.from <= value.to, {
+    message: 'from 不能晚于 to',
+  })
+  .refine(
+    (value) =>
+      (Date.parse(`${value.to}T00:00:00Z`) - Date.parse(`${value.from}T00:00:00Z`)) / 86_400_000 <=
+      MAX_CALENDAR_DAYS - 1,
+    { message: `日期范围最多 ${MAX_CALENDAR_DAYS} 天` },
+  );
+export type TrainingSummaryQuery = z.infer<typeof trainingSummaryQuerySchema>;
+
+const trainingSummaryCountsSchema = z.object({
+  plannedCount: z.number().int().nonnegative(),
+  completedCount: z.number().int().nonnegative(),
+  linkedCompletedCount: z.number().int().nonnegative(),
+  skippedCount: z.number().int().nonnegative(),
+  overdueCount: z.number().int().nonnegative(),
+  upcomingCount: z.number().int().nonnegative(),
+  eligibleCount: z.number().int().nonnegative(),
+  adherenceRate: z.number().min(0).max(1).nullable(),
+});
+export type TrainingSummaryCounts = z.infer<typeof trainingSummaryCountsSchema>;
+
+export const trainingSummaryWeeklyRollupSchema = trainingSummaryCountsSchema.extend({
+  weekStartLocalDate: z.iso.date(),
+  weekEndLocalDate: z.iso.date(),
+});
+export type TrainingSummaryWeeklyRollup = z.infer<typeof trainingSummaryWeeklyRollupSchema>;
+
+export const trainingSummaryResponseSchema = z.object({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  generatedForLocalDate: z.iso.date(),
+  timezoneOffsetMinutes: z.number().int().min(-840).max(840),
+  summary: trainingSummaryCountsSchema,
+  weeklyRollups: z.array(trainingSummaryWeeklyRollupSchema).max(15),
+});
+export type TrainingSummaryResponse = z.infer<typeof trainingSummaryResponseSchema>;
 
 export const athleteSettingsPatchSchema = z
   .object({

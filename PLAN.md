@@ -15,8 +15,18 @@ M3 statistics scope: only `activityType = RUN` counts towards volume; windows ar
 
 ### M4 scope and batches
 
-1. [x] Batch 1: training calendar (`/calendar`), `0003_training_calendar.sql` with the `planned_workouts` table, planned-workout CRUD APIs, and the calendar projection of actual activities. **Implemented, awaiting reviewer acceptance.**
-2. [ ] Batch 2: plan completion status, plan-to-activity links, adherence rate, and weekly rollups (not started).
+1. [x] Batch 1: training calendar (`/calendar`), `0003_training_calendar.sql` with the `planned_workouts` table, planned-workout CRUD APIs, and the calendar projection of actual activities. **Reviewer-accepted.**
+2. [x] Batch 2: plan completion status, manual one-to-one plan-to-activity links, adherence rate, and weekly rollups. **Implemented, awaiting reviewer acceptance.**
+
+M4 Batch 2 design record:
+
+- `0004_plan_completion.sql` (forward-only) adds `completion_status TEXT NOT NULL DEFAULT 'PLANNED'` and `linked_activity_id TEXT NULL REFERENCES activities(id) ON DELETE SET NULL` to `planned_workouts`, plus a partial unique index on `linked_activity_id` (one activity links to at most one plan; multiple NULLs allowed) and a `(scheduled_local_date, completion_status)` index for bounded rollups. Migrations 0000–0003 are untouched; legacy rows upgrade to `PLANNED` and re-running the migration set is idempotent.
+- Status model: `PLANNED | COMPLETED | SKIPPED`. Linking an activity forces `COMPLETED`; `COMPLETED` may be manual (`linkedActivityId = null`); moving to `PLANNED` or `SKIPPED` always clears the link; the link can be swapped or removed; deleting a plan never touches the activity, sources, samples, laps, or import history. If the underlying activity is deleted, the foreign key sets the link to null and `COMPLETED` degrades to manual completion. "已逾期" (overdue) is a derived display of `PLANNED + scheduledLocalDate < today`, not a stored state.
+- `PATCH /api/planned-workouts/:workoutId/completion` accepts a discriminated union (`{completionStatus:"PLANNED"}`, `{completionStatus:"SKIPPED"}`, `{completionStatus:"COMPLETED", linkedActivityId: string|null}`); status and link changes run in one transaction; missing plan 404, missing activity 404 `ACTIVITY_NOT_FOUND`, activity already linked to another plan 409 `ACTIVITY_ALREADY_LINKED` (no silent takeover). The ordinary PATCH keeps handling metadata fields only.
+- `GET /api/training-summary?from&to`: closed interval, `from <= to`, at most 93 days, else 400. Returns `from`, `to`, `generatedForLocalDate`, `timezoneOffsetMinutes`, `summary`, `weeklyRollups`. "Today" is derived from the athlete settings `timezoneOffsetMinutes`, never server UTC. `eligibleCount = completedCount + skippedCount + overdueCount`; `adherenceRate = completedCount / eligibleCount`, a 0–1 fraction formatted by the frontend, `null` when `eligibleCount` is 0 (never 0/NaN/Infinity). Plans still `PLANNED` on today or later count as upcoming, never overdue, and never lower the current rate; manual and linked completions both count; all workout types (including REST/STRENGTH) use the same status semantics. Weekly rollups are Monday-start natural weeks covering every week intersecting the range (labels may extend past the range, counts only include `[from, to]`), oldest first, zero-filled weeks included.
+- The calendar projection now carries `linkedActivity: CalendarActivitySummary | null` for in-range plans — a bounded summary (no samples/laps/sources) returned even when the linked activity's own date lies outside the queried range. Calendar and training summary keep a fixed query count independent of plan/activity counts and never read samples.
+- Frontend: plan entries show text badges (待完成/已完成/已跳过/已逾期) with distinct styles; the plan editor offers 标记为已完成, 关联实际活动并完成, 标记为已跳过, 恢复为待完成, and 解除活动关联, using the in-range activities as link candidates; 409 errors surface as readable messages. The calendar page requests the training summary over the real month first-to-last dates (grid filler days excluded) and shows 本月计划数/已完成数/已跳过与逾期数/执行率 plus a weekly rollup table, with loading, error, empty, and `adherenceRate = null` ("暂无可计算计划") states; mobile uses a stacked list with no horizontal overflow.
+- Still out of scope: automatic matching/suggestions, drag-and-drop or batch completion, one-plan-to-many-activities links, AI-generated plans, watch/Garmin writes, and all excluded items below.
 
 M4 excludes AI-generated plans, watch/Garmin Connect writes, and all other items in the excluded list below.
 
@@ -66,7 +76,8 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M2.1 closed: baseline accepted, premature optimization deferred with risks recorded.
 - [x] M3 Batch 1: Dashboard homepage with bounded dashboard API, stats, weekly trend, and recent activities.
 - [x] M3 Batch 2 and M3 acceptance: cross-activity trends page verified by reviewer.
-- [x] M4 Batch 1: training calendar, planned-workout CRUD, and calendar projection (awaiting reviewer acceptance).
+- [x] M4 Batch 1: training calendar, planned-workout CRUD, and calendar projection (reviewer-accepted).
+- [x] M4 Batch 2: plan completion status, one-to-one manual activity links, adherence rate, weekly rollups, and E2E coverage (implemented, awaiting reviewer acceptance; M4 as a whole is not yet accepted).
 
 ## M2 implementation record
 

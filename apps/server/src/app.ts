@@ -10,10 +10,13 @@ import {
   calendarQuerySchema,
   calendarResponseSchema,
   dashboardResponseSchema,
+  plannedWorkoutCompletionPatchSchema,
   plannedWorkoutCreateSchema,
   plannedWorkoutPatchSchema,
   plannedWorkoutSchema,
   resolveImportSchema,
+  trainingSummaryQuerySchema,
+  trainingSummaryResponseSchema,
   trendsQuerySchema,
   trendsResponseSchema,
 } from '@runcoach/shared';
@@ -119,6 +122,17 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return calendarResponseSchema.parse(dependencies.repository.getCalendarRange(query.data));
   });
 
+  app.get('/api/training-summary', async (request, reply) => {
+    const query = trainingSummaryQuerySchema.safeParse(request.query);
+    if (!query.success)
+      return reply
+        .code(400)
+        .send({ code: 'INVALID_TRAINING_SUMMARY_QUERY', message: '训练汇总查询参数无效' });
+    return trainingSummaryResponseSchema.parse(
+      dependencies.repository.getTrainingSummary(query.data),
+    );
+  });
+
   app.post('/api/planned-workouts', async (request, reply) => {
     const body = plannedWorkoutCreateSchema.safeParse(request.body);
     if (!body.success)
@@ -137,6 +151,32 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (updated === null)
       return reply.code(404).send({ code: 'NOT_FOUND', message: '计划训练不存在' });
     return plannedWorkoutSchema.parse(updated);
+  });
+
+  app.patch('/api/planned-workouts/:workoutId/completion', async (request, reply) => {
+    const params = workoutParamsSchema.safeParse(request.params);
+    const body = plannedWorkoutCompletionPatchSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        code: 'INVALID_PLANNED_WORKOUT_COMPLETION',
+        message: '计划训练完成状态修改无效',
+      });
+    }
+    try {
+      const updated = dependencies.repository.updatePlannedWorkoutCompletion(
+        params.data.workoutId,
+        body.data,
+      );
+      if (updated === null)
+        return reply.code(404).send({ code: 'NOT_FOUND', message: '计划训练不存在' });
+      return plannedWorkoutSchema.parse(updated);
+    } catch (error) {
+      if (error instanceof RepositoryConflictError) {
+        const status = error.code === 'ACTIVITY_NOT_FOUND' ? 404 : 409;
+        return reply.code(status).send({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
   });
 
   app.delete('/api/planned-workouts/:workoutId', async (request, reply) => {

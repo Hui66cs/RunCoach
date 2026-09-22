@@ -252,8 +252,18 @@ export const plannedWorkouts = sqliteTable(
     notes: text('notes'),
     targetDistanceMeters: real('target_distance_meters'),
     targetDurationSeconds: real('target_duration_seconds'),
+    completionStatus: text('completion_status').notNull().default('PLANNED'),
+    linkedActivityId: text('linked_activity_id').references(() => activities.id, {
+      onDelete: 'set null',
+    }),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
-  (table) => [index('planned_workouts_date_idx').on(table.scheduledLocalDate)],
+  (table) => [
+    index('planned_workouts_date_idx').on(table.scheduledLocalDate),
+    uniqueIndex('planned_workouts_linked_activity_uq')
+      .on(table.linkedActivityId)
+      .where(sql`${table.linkedActivityId} is not null`),
+    index('planned_workouts_date_status_idx').on(table.scheduledLocalDate, table.completionStatus),
+  ],
 );

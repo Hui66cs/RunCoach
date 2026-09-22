@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, gte, inArray, like, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, like, lt, lte, ne, or, sql } from 'drizzle-orm';
 import type {
   ActivityListPage,
   ActivityListQuery,
@@ -30,6 +30,10 @@ import type {
   PlannedWorkout,
   PlannedWorkoutCreate,
   PlannedWorkoutPatch,
+  PlannedWorkoutCompletionPatch,
+  TrainingSummaryQuery,
+  TrainingSummaryResponse,
+  TrainingSummaryCounts,
 } from '@runcoach/shared';
 import {
   importOutcomeSchema,
@@ -50,9 +54,11 @@ import {
 } from '@runcoach/analytics';
 import type { RunCoachDatabase } from '../db/client.js';
 import {
+  addDays,
   eachLocalDate,
   lastDaysWindow,
   localDateFromUtcTime,
+  mondayOfSameWeek,
   weeklyWindows,
   type LocalDateWindow,
 } from '../dashboard-dates.js';
@@ -1311,7 +1317,10 @@ export class ActivityRepository {
   /**
    * Bounded calendar projection for a closed local-date range: planned
    * workouts plus activity summaries, both filtered and ordered in SQL. A
-   * fixed two queries, no per-record lookups, no samples or source data.
+   * fixed number of queries (planned workouts, in-range activities, and at
+   * most one lookup of linked-activity summaries), no per-record lookups, no
+   * samples or source data. A linked activity is summarized even when its own
+   * date falls outside the queried range, because the plan is in range.
    */
   getCalendarRange(query: CalendarQuery): CalendarResponse {
     const plannedRows = this.db
@@ -1343,20 +1352,61 @@ export class ActivityRepository {
       .where(and(gte(activities.localDate, query.from), lte(activities.localDate, query.to)))
       .orderBy(asc(activities.localDate), asc(activities.startTimeUtc), asc(activities.id))
       .all();
+    const linkedIds = [
+      ...new Set(
+        plannedRows.map((row) => row.linkedActivityId).filter((id): id is string => id !== null),
+      ),
+    ];
+    const linkedRows =
+      linkedIds.length === 0
+        ? []
+        : this.db
+            .select({
+              id: activities.id,
+              localDate: activities.localDate,
+              activityType: activities.activityType,
+              name: activities.name,
+              distanceMeters: activities.distanceMeters,
+              durationSeconds: activities.durationSeconds,
+              movingDurationSeconds: activities.movingDurationSeconds,
+            })
+            .from(activities)
+            .where(inArray(activities.id, linkedIds))
+            .all();
+    const linkedById = new Map(linkedRows.map((row) => [row.id, row]));
     return {
       from: query.from,
       to: query.to,
-      plannedWorkouts: plannedRows.map((row) => ({
-        id: row.id,
-        scheduledLocalDate: row.scheduledLocalDate,
-        workoutType: row.workoutType as PlannedWorkout['workoutType'],
-        title: row.title,
-        notes: row.notes,
-        targetDistanceMeters: row.targetDistanceMeters,
-        targetDurationSeconds: row.targetDurationSeconds,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      })),
+      plannedWorkouts: plannedRows.map((row) => {
+        const linked =
+          row.linkedActivityId === null ? undefined : linkedById.get(row.linkedActivityId);
+        return {
+          id: row.id,
+          scheduledLocalDate: row.scheduledLocalDate,
+          workoutType: row.workoutType as PlannedWorkout['workoutType'],
+          title: row.title,
+          notes: row.notes,
+          targetDistanceMeters: row.targetDistanceMeters,
+          targetDurationSeconds: row.targetDurationSeconds,
+          completionStatus: row.completionStatus as PlannedWorkout['completionStatus'],
+          linkedActivityId: row.linkedActivityId,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+          linkedActivity:
+            linked === undefined
+              ? null
+              : {
+                  id: linked.id,
+                  localDate: linked.localDate,
+                  activityType:
+                    linked.activityType as CalendarResponse['activities'][number]['activityType'],
+                  name: linked.name,
+                  distanceMeters: linked.distanceMeters,
+                  durationSeconds: linked.durationSeconds,
+                  movingDurationSeconds: linked.movingDurationSeconds,
+                },
+        };
+      }),
       activities: activityRows.map((row) => ({
         id: row.id,
         localDate: row.localDate,
@@ -1430,6 +1480,208 @@ export class ActivityRepository {
     return result.changes === 1;
   }
 
+  /**
+   * Updates completion status and the one-to-one activity link inside a
+   * single transaction. COMPLETED requires an explicit `linkedActivityId`
+   * (null means manually completed); PLANNED/SKIPPED always clear the link.
+   * Returns null when the workout does not exist; throws
+   * `RepositoryConflictError` with `ACTIVITY_NOT_FOUND` or
+   * `ACTIVITY_ALREADY_LINKED` for link conflicts. Never touches the activity
+   * itself.
+   */
+  updatePlannedWorkoutCompletion(
+    workoutId: string,
+    request: PlannedWorkoutCompletionPatch,
+  ): PlannedWorkout | null {
+    return this.db.transaction((tx) => {
+      const current = tx
+        .select()
+        .from(plannedWorkouts)
+        .where(eq(plannedWorkouts.id, workoutId))
+        .get();
+      if (current === undefined) return null;
+      if (request.completionStatus === 'COMPLETED') {
+        if (request.linkedActivityId !== null) {
+          const activity = tx
+            .select({ id: activities.id })
+            .from(activities)
+            .where(eq(activities.id, request.linkedActivityId))
+            .get();
+          if (activity === undefined) {
+            throw new RepositoryConflictError('ACTIVITY_NOT_FOUND', '要关联的实际活动不存在');
+          }
+          const other = tx
+            .select({ id: plannedWorkouts.id })
+            .from(plannedWorkouts)
+            .where(
+              and(
+                eq(plannedWorkouts.linkedActivityId, request.linkedActivityId),
+                ne(plannedWorkouts.id, workoutId),
+              ),
+            )
+            .get();
+          if (other !== undefined) {
+            throw new RepositoryConflictError(
+              'ACTIVITY_ALREADY_LINKED',
+              '该实际活动已关联其他计划训练',
+            );
+          }
+        }
+        tx.update(plannedWorkouts)
+          .set({
+            completionStatus: 'COMPLETED',
+            linkedActivityId: request.linkedActivityId,
+            updatedAt: now(),
+          })
+          .where(eq(plannedWorkouts.id, workoutId))
+          .run();
+      } else {
+        tx.update(plannedWorkouts)
+          .set({
+            completionStatus: request.completionStatus,
+            linkedActivityId: null,
+            updatedAt: now(),
+          })
+          .where(eq(plannedWorkouts.id, workoutId))
+          .run();
+      }
+      const row = tx.select().from(plannedWorkouts).where(eq(plannedWorkouts.id, workoutId)).get();
+      if (row === undefined) throw new Error('更新计划完成状态后无法读取记录');
+      return this.toPlannedWorkout(row);
+    });
+  }
+
+  /**
+   * Bounded training execution summary. Planned workouts are aggregated in
+   * SQLite by (scheduled_local_date, completion_status) over the closed
+   * `[from, to]` range; "today" is derived from the athlete settings timezone
+   * offset (injectable for deterministic tests). Fixed two queries (athlete
+   * settings + aggregation), independent of the number of plans or
+   * activities, and no samples are read.
+   *
+   * Definitions: `eligibleCount = completedCount + skippedCount +
+   * overdueCount`; `adherenceRate = completedCount / eligibleCount`, null
+   * when `eligibleCount` is 0. PLANNED plans scheduled today or later count
+   * as upcoming and never lower the current adherence rate. Weekly rollups
+   * are Monday-start natural weeks (labels may extend beyond the request
+   * range) but only count plans inside `[from, to]`; weeks without plans are
+   * zero-filled and ordered oldest first.
+   */
+  getTrainingSummary(
+    query: TrainingSummaryQuery,
+    todayLocalDate?: string,
+  ): TrainingSummaryResponse {
+    const settings = this.getAthleteSettings();
+    const today =
+      todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);
+    const groupedRows = this.db
+      .select({
+        scheduledLocalDate: plannedWorkouts.scheduledLocalDate,
+        completionStatus: plannedWorkouts.completionStatus,
+        count: sql<number>`count(*)`,
+        linkedCount: sql<number>`count(${plannedWorkouts.linkedActivityId})`,
+      })
+      .from(plannedWorkouts)
+      .where(
+        and(
+          gte(plannedWorkouts.scheduledLocalDate, query.from),
+          lte(plannedWorkouts.scheduledLocalDate, query.to),
+        ),
+      )
+      .groupBy(plannedWorkouts.scheduledLocalDate, plannedWorkouts.completionStatus)
+      .all();
+    const byDate = new Map<
+      string,
+      {
+        planned: number;
+        completed: number;
+        linkedCompleted: number;
+        skipped: number;
+        overdue: number;
+        upcoming: number;
+      }
+    >();
+    for (const date of eachLocalDate({ startLocalDate: query.from, endLocalDate: query.to })) {
+      byDate.set(date, {
+        planned: 0,
+        completed: 0,
+        linkedCompleted: 0,
+        skipped: 0,
+        overdue: 0,
+        upcoming: 0,
+      });
+    }
+    for (const row of groupedRows) {
+      const entry = byDate.get(row.scheduledLocalDate);
+      if (entry === undefined) continue;
+      const count = Number(row.count);
+      const linked = Number(row.linkedCount);
+      entry.planned += count;
+      if (row.completionStatus === 'COMPLETED') {
+        entry.completed += count;
+        entry.linkedCompleted += linked;
+      } else if (row.completionStatus === 'SKIPPED') {
+        entry.skipped += count;
+      } else if (row.scheduledLocalDate < today) {
+        entry.overdue += count;
+      } else {
+        entry.upcoming += count;
+      }
+    }
+    const toCounts = (window: LocalDateWindow): TrainingSummaryCounts => {
+      let planned = 0;
+      let completed = 0;
+      let linkedCompleted = 0;
+      let skipped = 0;
+      let overdue = 0;
+      let upcoming = 0;
+      for (const date of eachLocalDate(window)) {
+        const entry = byDate.get(date);
+        if (entry === undefined) continue;
+        planned += entry.planned;
+        completed += entry.completed;
+        linkedCompleted += entry.linkedCompleted;
+        skipped += entry.skipped;
+        overdue += entry.overdue;
+        upcoming += entry.upcoming;
+      }
+      const eligible = completed + skipped + overdue;
+      return {
+        plannedCount: planned,
+        completedCount: completed,
+        linkedCompletedCount: linkedCompleted,
+        skippedCount: skipped,
+        overdueCount: overdue,
+        upcomingCount: upcoming,
+        eligibleCount: eligible,
+        adherenceRate: eligible === 0 ? null : completed / eligible,
+      };
+    };
+    const weeklyRollups: TrainingSummaryResponse['weeklyRollups'] = [];
+    let weekStart = mondayOfSameWeek(query.from);
+    const lastWeekStart = mondayOfSameWeek(query.to);
+    while (weekStart <= lastWeekStart) {
+      const weekEnd = addDays(weekStart, 6);
+      weeklyRollups.push({
+        weekStartLocalDate: weekStart,
+        weekEndLocalDate: weekEnd,
+        ...toCounts({
+          startLocalDate: weekStart < query.from ? query.from : weekStart,
+          endLocalDate: weekEnd > query.to ? query.to : weekEnd,
+        }),
+      });
+      weekStart = addDays(weekStart, 7);
+    }
+    return {
+      from: query.from,
+      to: query.to,
+      generatedForLocalDate: today,
+      timezoneOffsetMinutes: settings.timezoneOffsetMinutes,
+      summary: toCounts({ startLocalDate: query.from, endLocalDate: query.to }),
+      weeklyRollups,
+    };
+  }
+
   private toPlannedWorkout(row: typeof plannedWorkouts.$inferSelect): PlannedWorkout {
     return {
       id: row.id,
@@ -1439,6 +1691,8 @@ export class ActivityRepository {
       notes: row.notes,
       targetDistanceMeters: row.targetDistanceMeters,
       targetDurationSeconds: row.targetDurationSeconds,
+      completionStatus: row.completionStatus as PlannedWorkout['completionStatus'],
+      linkedActivityId: row.linkedActivityId,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

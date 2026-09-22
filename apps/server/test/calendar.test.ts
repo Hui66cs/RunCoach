@@ -86,8 +86,8 @@ async function buildHarness(): Promise<AppHarness> {
   return { directory, database, app, repository, fileStore };
 }
 
-function teardownHarness(harness: AppHarness): void {
-  void harness.app.close();
+async function teardownHarness(harness: AppHarness): Promise<void> {
+  await harness.app.close();
   harness.database.close();
   fs.rmSync(harness.directory, { recursive: true, force: true });
 }
@@ -111,8 +111,8 @@ describe('training calendar and planned workouts', () => {
     harness = await buildHarness();
   });
 
-  afterEach(() => {
-    teardownHarness(harness);
+  afterEach(async () => {
+    await teardownHarness(harness);
   });
 
   it('applies 0003 forward on top of a real 0002-state database and stays idempotent', () => {

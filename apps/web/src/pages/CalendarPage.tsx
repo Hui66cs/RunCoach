@@ -2,20 +2,28 @@ import { useEffect, useState } from 'react';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import type {
+  CalendarPlannedWorkout,
   CalendarResponse,
-  PlannedWorkout,
+  PlannedWorkoutCompletionPatch,
   PlannedWorkoutCreate,
   PlannedWorkoutPatch,
+  TrainingSummaryWeeklyRollup,
 } from '@runcoach/shared';
 import {
   createPlannedWorkout,
   deletePlannedWorkout,
   getCalendarRange,
+  getTrainingSummary,
   updatePlannedWorkout,
+  updatePlannedWorkoutCompletion,
 } from '../api.js';
 import { formatDistance, formatDuration } from '../format.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
-import { PlannedWorkoutDialog, workoutTypeLabels } from '../components/PlannedWorkoutDialog.js';
+import {
+  PlannedWorkoutDialog,
+  plannedStatusBadge,
+  workoutTypeLabels,
+} from '../components/PlannedWorkoutDialog.js';
 
 const activityTypeLabels: Record<string, string> = {
   RUN: '跑步',
@@ -69,7 +77,7 @@ function monthGrid(month: string): MonthGrid {
   return { from, to: addDays(from, rows * 7 - 1), dates, monthDates };
 }
 
-function targetSummary(workout: PlannedWorkout): string {
+function targetSummary(workout: CalendarPlannedWorkout): string {
   if (workout.workoutType === 'REST') return '休息日';
   const parts: string[] = [];
   if (workout.targetDistanceMeters != null)
@@ -77,6 +85,37 @@ function targetSummary(workout: PlannedWorkout): string {
   if (workout.targetDurationSeconds != null)
     parts.push(formatDuration(workout.targetDurationSeconds));
   return parts.length > 0 ? parts.join(' · ') : '无目标';
+}
+
+function plannedEntryClasses(workout: CalendarPlannedWorkout, today: string, compact: boolean) {
+  const base = `block w-full rounded border px-1.5 text-left ${compact ? 'py-0.5' : 'py-1'}`;
+  if (workout.completionStatus === 'COMPLETED') {
+    return `${base} border-emerald-500/80 bg-emerald-800/40 hover:border-emerald-400`;
+  }
+  if (workout.completionStatus === 'SKIPPED') {
+    return `${base} border-slate-600/70 bg-slate-800/40 opacity-70 hover:border-slate-400`;
+  }
+  if (workout.completionStatus === 'PLANNED' && workout.scheduledLocalDate < today) {
+    return `${base} border-amber-600/70 bg-amber-900/30 hover:border-amber-400`;
+  }
+  return `${base} border-emerald-700/60 bg-emerald-900/30 hover:border-emerald-500`;
+}
+
+function plannedBadgeClasses(workout: CalendarPlannedWorkout, today: string) {
+  if (workout.completionStatus === 'COMPLETED') return 'bg-emerald-500/30 text-emerald-200';
+  if (workout.completionStatus === 'SKIPPED') return 'bg-slate-500/30 text-slate-300';
+  if (workout.completionStatus === 'PLANNED' && workout.scheduledLocalDate < today) {
+    return 'bg-amber-500/20 text-amber-300';
+  }
+  return 'bg-emerald-500/20 text-emerald-300';
+}
+
+function formatRate(rate: number | null): string {
+  return rate === null ? '—' : `${(rate * 100).toFixed(0)}%`;
+}
+
+function weekLabel(rollup: TrainingSummaryWeeklyRollup): string {
+  return `${rollup.weekStartLocalDate.slice(5)} ~ ${rollup.weekEndLocalDate.slice(5)}`;
 }
 
 export function CalendarPage() {
@@ -98,22 +137,36 @@ export function CalendarPage() {
     }
   }, [month, monthParam]);
   const grid = monthGrid(month);
+  const today = todayLocalDate();
   const client = useQueryClient();
   const query = useQuery({
     queryKey: ['calendar', grid.from, grid.to],
     queryFn: () => getCalendarRange({ from: grid.from, to: grid.to }),
     placeholderData: keepPreviousData,
   });
+  // Monthly adherence uses the real first-to-last month dates so adjacent
+  // filler days from the grid never leak into the month rate.
+  const monthFrom = grid.monthDates[0]!;
+  const monthTo = grid.monthDates[grid.monthDates.length - 1]!;
+  const summaryQuery = useQuery({
+    queryKey: ['training-summary', monthFrom, monthTo],
+    queryFn: () => getTrainingSummary({ from: monthFrom, to: monthTo }),
+  });
 
   const [editor, setEditor] = useState<
-    { mode: 'create'; date: string } | { mode: 'edit'; workout: PlannedWorkout } | null
+    { mode: 'create'; date: string } | { mode: 'edit'; workout: CalendarPlannedWorkout } | null
   >(null);
-  const [pendingDelete, setPendingDelete] = useState<PlannedWorkout | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<CalendarPlannedWorkout | null>(null);
+
+  const invalidateCalendarData = () => {
+    void client.invalidateQueries({ queryKey: ['calendar'] });
+    void client.invalidateQueries({ queryKey: ['training-summary'] });
+  };
 
   const createMutation = useMutation({
     mutationFn: (body: PlannedWorkoutCreate) => createPlannedWorkout(body),
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['calendar'] });
+      invalidateCalendarData();
       setEditor(null);
     },
   });
@@ -121,23 +174,32 @@ export function CalendarPage() {
     mutationFn: ({ id, patch }: { id: string; patch: PlannedWorkoutPatch }) =>
       updatePlannedWorkout(id, patch),
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['calendar'] });
+      invalidateCalendarData();
       setEditor(null);
+    },
+  });
+  const completionMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: PlannedWorkoutCompletionPatch }) =>
+      updatePlannedWorkoutCompletion(id, patch),
+    onSuccess: () => {
+      invalidateCalendarData();
     },
   });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deletePlannedWorkout(id),
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['calendar'] });
+      invalidateCalendarData();
       setPendingDelete(null);
     },
   });
   const busy = createMutation.isPending || updateMutation.isPending || deleteMutation.isPending;
+  const completionBusy = completionMutation.isPending;
   const dialogError = createMutation.error?.message ?? updateMutation.error?.message ?? null;
+  const completionError = completionMutation.error?.message ?? null;
   const deleteError = deleteMutation.error?.message ?? null;
 
   const data = query.data;
-  const plannedByDate = new Map<string, PlannedWorkout[]>();
+  const plannedByDate = new Map<string, CalendarPlannedWorkout[]>();
   const activitiesByDate = new Map<string, CalendarResponse['activities']>();
   for (const workout of data?.plannedWorkouts ?? []) {
     plannedByDate.set(workout.scheduledLocalDate, [
@@ -155,17 +217,27 @@ export function CalendarPage() {
     grid.monthDates.some((date) => plannedByDate.has(date)) ||
     grid.monthDates.some((date) => activitiesByDate.has(date));
 
-  const renderPlanned = (workout: PlannedWorkout, compact: boolean) => (
+  const renderPlanned = (workout: CalendarPlannedWorkout, compact: boolean) => (
     <button
       key={workout.id}
       type="button"
       onClick={() => setEditor({ mode: 'edit', workout })}
-      className={`block w-full rounded border border-emerald-700/60 bg-emerald-900/30 px-1.5 text-left hover:border-emerald-500 ${compact ? 'py-0.5' : 'py-1'}`}
-      title={`${workout.title}（点击编辑）`}
+      className={plannedEntryClasses(workout, today, compact)}
+      title={`${workout.title}（${plannedStatusBadge(workout, today)}，点击编辑）`}
     >
       <span className="flex items-center gap-1">
-        <span className="rounded bg-emerald-500/20 px-1 text-[10px] text-emerald-300">计划</span>
-        <span className="truncate text-xs font-medium">{workout.title}</span>
+        <span
+          className={`rounded px-1 text-[10px] font-semibold ${plannedBadgeClasses(workout, today)}`}
+        >
+          {plannedStatusBadge(workout, today)}
+        </span>
+        <span
+          className={`truncate text-xs font-medium ${
+            workout.completionStatus === 'SKIPPED' ? 'line-through' : ''
+          }`}
+        >
+          {workout.title}
+        </span>
       </span>
       <span className="mt-0.5 block truncate text-[11px] text-slate-400">
         {workoutTypeLabels[workout.workoutType]} · {targetSummary(workout)}
@@ -192,13 +264,15 @@ export function CalendarPage() {
     </Link>
   );
 
+  const summary = summaryQuery.data;
+
   return (
     <div className="space-y-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-3xl font-bold">训练日历</h1>
           <p className="mt-2 text-slate-400">
-            计划训练与实际活动按本地日期展示；绿色为计划，蓝色为实际活动。
+            计划训练与实际活动按本地日期展示；计划按状态标注，蓝色为实际活动。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -238,6 +312,102 @@ export function CalendarPage() {
           </span>
         )}
       </div>
+
+      {/* 本月执行汇总：只统计月首到月末的计划 */}
+      <section
+        className="rounded-xl border border-slate-800 bg-slate-900 p-4"
+        aria-label="本月训练执行汇总"
+        data-testid="training-summary"
+      >
+        <h3 className="text-base font-semibold">
+          本月执行（{monthFrom} ~ {monthTo}）
+        </h3>
+        {summaryQuery.isLoading && <p className="mt-3 text-sm text-slate-400">正在加载训练汇总…</p>}
+        {summaryQuery.isError && (
+          <p className="mt-3 text-sm text-red-400">
+            {summaryQuery.error?.message ?? '训练汇总加载失败'}
+          </p>
+        )}
+        {summary !== undefined && summary.summary.plannedCount === 0 && (
+          <p className="mt-3 text-sm text-slate-400">本月暂无计划训练，执行率暂无可计算计划。</p>
+        )}
+        {summary !== undefined && summary.summary.plannedCount > 0 && (
+          <>
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <SummaryStat
+                label="本月计划"
+                value={`${summary.summary.plannedCount}`}
+                data-testid="summary-planned-count"
+              />
+              <SummaryStat
+                label="已完成"
+                value={`${summary.summary.completedCount}`}
+                data-testid="summary-completed-count"
+              />
+              <SummaryStat
+                label="已跳过 / 逾期"
+                value={`${summary.summary.skippedCount} / ${summary.summary.overdueCount}`}
+                data-testid="summary-skipped-overdue"
+              />
+              <SummaryStat
+                label="执行率"
+                value={
+                  summary.summary.adherenceRate === null
+                    ? '暂无可计算计划'
+                    : `${(summary.summary.adherenceRate * 100).toFixed(0)}%`
+                }
+                data-testid="adherence-rate"
+              />
+            </div>
+            <div className="mt-4">
+              <p className="text-sm font-semibold text-slate-300">按周汇总</p>
+              {/* 桌面端紧凑表格 */}
+              <table className="mt-2 hidden w-full text-left text-xs md:table">
+                <thead className="text-slate-500">
+                  <tr>
+                    <th className="py-1 pr-2 font-normal">周</th>
+                    <th className="py-1 pr-2 font-normal">计划</th>
+                    <th className="py-1 pr-2 font-normal">完成</th>
+                    <th className="py-1 pr-2 font-normal">跳过</th>
+                    <th className="py-1 pr-2 font-normal">逾期</th>
+                    <th className="py-1 pr-2 font-normal">待完成</th>
+                    <th className="py-1 font-normal">执行率</th>
+                  </tr>
+                </thead>
+                <tbody className="text-slate-300">
+                  {summary.weeklyRollups.map((rollup) => (
+                    <tr key={rollup.weekStartLocalDate} className="border-t border-slate-800">
+                      <td className="py-1 pr-2">{weekLabel(rollup)}</td>
+                      <td className="py-1 pr-2">{rollup.plannedCount}</td>
+                      <td className="py-1 pr-2">{rollup.completedCount}</td>
+                      <td className="py-1 pr-2">{rollup.skippedCount}</td>
+                      <td className="py-1 pr-2">{rollup.overdueCount}</td>
+                      <td className="py-1 pr-2">
+                        {rollup.plannedCount - rollup.completedCount - rollup.skippedCount}
+                      </td>
+                      <td className="py-1">{formatRate(rollup.adherenceRate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {/* 窄屏：紧凑列表，不依赖横向滚动或 hover */}
+              <ul className="mt-2 space-y-1 text-xs text-slate-300 md:hidden">
+                {summary.weeklyRollups.map((rollup) => (
+                  <li key={rollup.weekStartLocalDate} className="rounded bg-slate-950/60 p-2">
+                    <p className="font-medium text-slate-200">{weekLabel(rollup)}</p>
+                    <p className="mt-1 text-slate-400">
+                      计划 {rollup.plannedCount} · 完成 {rollup.completedCount} · 跳过{' '}
+                      {rollup.skippedCount} · 逾期 {rollup.overdueCount} · 执行率{' '}
+                      {formatRate(rollup.adherenceRate)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </>
+        )}
+      </section>
+
       {query.isLoading && <State text="正在加载日历…" />}
       {query.isError && <State text={query.error?.message ?? '日历加载失败'} error />}
       {data !== undefined && !monthHasContent && (
@@ -259,7 +429,7 @@ export function CalendarPage() {
             <div className="grid grid-cols-7 gap-1">
               {grid.dates.map((date) => {
                 const inMonth = date.startsWith(month);
-                const isToday = date === todayLocalDate();
+                const isToday = date === today;
                 return (
                   <div
                     key={date}
@@ -309,9 +479,7 @@ export function CalendarPage() {
                 <div key={date} className="rounded-xl border border-slate-800 bg-slate-900 p-3">
                   <p className="mb-2 text-sm font-semibold text-slate-300">
                     {date}
-                    {date === todayLocalDate() && (
-                      <span className="ml-2 text-xs text-emerald-400">今天</span>
-                    )}
+                    {date === today && <span className="ml-2 text-xs text-emerald-400">今天</span>}
                   </p>
                   <div className="space-y-1.5">
                     {planned.map((workout) => renderPlanned(workout, false))}
@@ -333,13 +501,31 @@ export function CalendarPage() {
         <PlannedWorkoutDialog
           key={editor.mode === 'edit' ? editor.workout.id : editor.date}
           mode={editor.mode}
-          workout={editor.mode === 'edit' ? editor.workout : null}
+          workout={
+            editor.mode === 'edit'
+              ? (data?.plannedWorkouts.find((entry) => entry.id === editor.workout.id) ??
+                editor.workout)
+              : null
+          }
           defaultDate={editor.mode === 'create' ? editor.date : editor.workout.scheduledLocalDate}
+          today={today}
+          activityCandidates={data?.activities ?? []}
+          linkedActivity={
+            editor.mode === 'edit'
+              ? (
+                  data?.plannedWorkouts.find((entry) => entry.id === editor.workout.id) ??
+                  editor.workout
+                ).linkedActivity
+              : null
+          }
           busy={busy}
+          completionBusy={completionBusy}
           errorMessage={dialogError}
+          completionError={completionError}
           onClose={() => {
             createMutation.reset();
             updateMutation.reset();
+            completionMutation.reset();
             setEditor(null);
           }}
           onSubmit={(values) => {
@@ -347,6 +533,11 @@ export function CalendarPage() {
             updateMutation.reset();
             if (editor.mode === 'create') createMutation.mutate(values);
             else updateMutation.mutate({ id: editor.workout.id, patch: values });
+          }}
+          onCompletion={(request) => {
+            if (editor.mode !== 'edit') return;
+            completionMutation.reset();
+            completionMutation.mutate({ id: editor.workout.id, patch: request });
           }}
           onDelete={
             editor.mode === 'edit'
@@ -377,6 +568,25 @@ export function CalendarPage() {
         }}
       />
       {deleteError !== null && <State text={deleteError} error />}
+    </div>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  'data-testid': testId,
+}: {
+  label: string;
+  value: string;
+  'data-testid'?: string;
+}) {
+  return (
+    <div className="rounded-lg bg-slate-950/60 p-2">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-0.5 text-lg font-semibold text-slate-100" data-testid={testId}>
+        {value}
+      </p>
     </div>
   );
 }
