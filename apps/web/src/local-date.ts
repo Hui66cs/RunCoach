@@ -31,3 +31,10 @@ export function isOverdue(scheduledLocalDate: string, today: string): boolean {
 export function browserOffsetMinutes(nowMs: number = Date.now()): number {
   return -new Date(nowMs).getTimezoneOffset();
 }
+
+/** True when `value` is a real `YYYY-MM-DD` calendar date (rejects 2026-02-30 etc.). */
+export function isValidLocalDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const epochMs = Date.parse(`${value}T00:00:00Z`);
+  return !Number.isNaN(epochMs) && new Date(epochMs).toISOString().slice(0, 10) === value;
+}

@@ -3,6 +3,7 @@
   "compilerOptions": {
     "composite": true,
     "noEmit": true,
+    "lib": ["ES2023", "DOM"],
     "types": ["node", "@playwright/test"]
   },
   "include": ["playwright.config.ts", "e2e/**/*.ts"]

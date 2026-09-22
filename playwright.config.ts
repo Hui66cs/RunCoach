@@ -19,6 +19,11 @@ export default defineConfig({
       testMatch: /calendar\.spec\.ts/,
       use: { baseURL: 'http://127.0.0.1:5187' },
     },
+    {
+      name: 'daily-status',
+      testMatch: /daily-status\.spec\.ts/,
+      use: { baseURL: 'http://127.0.0.1:5188' },
+    },
   ],
   webServer: [
     {
@@ -53,6 +58,13 @@ export default defineConfig({
       command:
         'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-calendar RUNCOACH_PORT=3114 VITE_API_TARGET=http://127.0.0.1:3114 VITE_WEB_PORT=5187 pnpm dev:e2e',
       url: 'http://127.0.0.1:5187/api/health',
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command:
+        'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-daily-status RUNCOACH_PORT=3115 VITE_API_TARGET=http://127.0.0.1:3115 VITE_WEB_PORT=5188 pnpm dev:e2e',
+      url: 'http://127.0.0.1:5188/api/health',
       reuseExistingServer: false,
       timeout: 120_000,
     },

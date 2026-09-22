@@ -3,6 +3,7 @@ import {
   browserOffsetMinutes,
   canonicalMonth,
   isOverdue,
+  isValidLocalDate,
   localDateFromEpoch,
 } from './local-date.js';
 
@@ -52,5 +53,14 @@ describe('canonical local date from athlete timezone offset', () => {
     // The fallback alone must reproduce a valid local date through the same
     // pure pipeline, whatever the host timezone is.
     expect(localDateFromEpoch(epochMs, offset)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('validates real calendar dates for the ?date= parameter', () => {
+    expect(isValidLocalDate('2026-09-22')).toBe(true);
+    expect(isValidLocalDate('2024-02-29')).toBe(true); // leap year.
+    expect(isValidLocalDate('2026-09-31')).toBe(false); // impossible day.
+    expect(isValidLocalDate('2026-13-01')).toBe(false);
+    expect(isValidLocalDate('2026-9-1')).toBe(false);
+    expect(isValidLocalDate('not-a-date')).toBe(false);
   });
 });

@@ -7,6 +7,9 @@ import type {
   AthleteSettingsPatch,
   CalendarQuery,
   CalendarResponse,
+  DailyStatusEntry,
+  DailyStatusRangeResponse,
+  DailyStatusUpsert,
   DashboardResponse,
   PlannedWorkout,
   PlannedWorkoutCompletionPatch,
@@ -103,4 +106,25 @@ export function updateAthleteSettings(patch: AthleteSettingsPatch): Promise<Athl
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
   });
+}
+export function getDailyStatusRange(localDate: string): Promise<DailyStatusRangeResponse> {
+  const params = new URLSearchParams({ from: localDate, to: localDate });
+  return request(`/api/daily-status?${params.toString()}`);
+}
+export function upsertDailyStatus(
+  localDate: string,
+  patch: DailyStatusUpsert,
+): Promise<DailyStatusEntry> {
+  return request(`/api/daily-status/${localDate}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
+export async function deleteDailyStatus(localDate: string): Promise<void> {
+  const response = await fetch(`/api/daily-status/${localDate}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? `请求失败：${response.status}`);
+  }
 }

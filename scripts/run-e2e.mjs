@@ -8,6 +8,7 @@ const directories = [
   '.e2e-data-dashboard',
   '.e2e-data-trends',
   '.e2e-data-calendar',
+  '.e2e-data-daily-status',
 ].map((name) => path.resolve(name));
 const clean = () => {
   for (const directory of directories) fs.rmSync(directory, { recursive: true, force: true });

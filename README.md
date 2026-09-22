@@ -66,16 +66,17 @@ The UI has Activity, Pending, and Import History views. Medium-confidence FIT ma
 - `/activities`: paginated, filterable formal activity list.
 - `/activities/:activityId`: summary, native/derived splits, deterministic analysis, bounded interactive charts, offline route outline, and folded data provenance.
 - `/calendar`: monthly training calendar with planned workouts, completion status (待完成/已完成/已跳过/已逾期), manual plan-to-activity links, and monthly/weekly adherence.
+- `/daily-status`: private, local daily self-report (sleep, fatigue, muscle soreness, stress, motivation on 1–5 scales, resting heart rate, notes) with per-date create/edit/delete; no medical conclusions and no training advice.
 - `/trends`: 12/26/52-week cross-activity volume, pace, and heart-rate trends.
 - `/imports`: the complete M1.1 upload, pending-resolution, and history loop.
-- `/settings`: local athlete heart-rate and timezone settings used by deterministic analysis. The athlete profile (name, experience level, primary goal, weekly distance target) exists as a data model and `PATCH /api/settings/athlete` API since M5 Batch 1, but its settings-page form is a later M5 batch — the page currently edits heart rates, timezone offset, and units only.
+- `/settings`: local athlete heart-rate and timezone settings used by deterministic analysis, plus the athlete profile editor (name, experience level, primary goal, weekly distance target in km, stored as meters).
 
-Complete samples remain in SQLite. Activity detail metadata does not return them; `/series` applies SQL range filtering and bounded deterministic downsampling. The daily-status REST API exists since M5 Batch 1, but its frontend entry point is still a later milestone batch.
+Complete samples remain in SQLite. Activity detail metadata does not return them; `/series` applies SQL range filtering and bounded deterministic downsampling. The daily-status REST API exists since M5 Batch 1, and its frontend entry point landed in M5 Batch 2; the Dashboard daily-status card and today's plan are still a later M5 batch.
 
 Charts render pace on a dedicated inverted `min/km` axis. Acceptance results, API changes, and manual verification steps are recorded in `docs/M2_ACCEPTANCE.md`.
 
 ## Current limitations
 
-- No AI coach, automatic training suggestions, readiness/recovery scores, medical conclusions, ParroTao online sync, watch/Garmin Connect writes, authentication, backup/restore, online map, or cloud services. The daily-status frontend entry point (Dashboard cards and forms) is planned for a later M5 batch.
+- No AI coach, automatic training suggestions, readiness/recovery scores, medical conclusions, ParroTao online sync, watch/Garmin Connect writes, authentication, backup/restore, online map, or cloud services. The Dashboard daily-status card, today's plan, and recent plans are planned for a later M5 batch.
 - A source system without an activity ID cannot distinguish two activities of the same type starting in the same UTC second. A collision within one CSV is rejected explicitly.
 - Distribution is not supported because the selected Garmin FIT SDK has license restrictions that require review before redistribution.
