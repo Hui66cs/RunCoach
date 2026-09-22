@@ -239,8 +239,30 @@ export const athleteSettings = sqliteTable('athlete_settings', {
   heartRateZoneMethod: text('heart_rate_zone_method').notNull().default('MAX_HR_PERCENT'),
   distanceUnit: text('distance_unit').notNull().default('METRIC'),
   timezoneOffsetMinutes: integer('timezone_offset_minutes').notNull().default(480),
+  displayName: text('display_name'),
+  experienceLevel: text('experience_level'),
+  primaryGoal: text('primary_goal'),
+  weeklyDistanceTargetMeters: integer('weekly_distance_target_meters'),
   updatedAt: text('updated_at').notNull(),
 });
+
+export const dailyStatusEntries = sqliteTable(
+  'daily_status_entries',
+  {
+    id: text('id').primaryKey(),
+    localDate: text('local_date').notNull(),
+    sleepQuality: integer('sleep_quality'),
+    fatigueLevel: integer('fatigue_level'),
+    muscleSorenessLevel: integer('muscle_soreness_level'),
+    stressLevel: integer('stress_level'),
+    motivationLevel: integer('motivation_level'),
+    restingHeartRateBpm: integer('resting_heart_rate_bpm'),
+    notes: text('notes'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('daily_status_entries_local_date_uq').on(table.localDate)],
+);
 
 export const plannedWorkouts = sqliteTable(
   'planned_workouts',

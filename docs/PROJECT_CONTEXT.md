@@ -65,16 +65,18 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
   - 周期选择保存在 URL query（`?weeks=26`），非法值回退 12 周；12 周默认。
 - record 级心率趋势属于未来范围，M3 的心率口径基于活动级 canonical `averageHeartRateBpm`。
 
-### 当前里程碑 M4（训练日历与本地训练计划，进行中）
+### M4（训练日历与本地训练计划，阶段验收通过）
 
-- Batch 1 已通过 reviewer 验收：
+M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现并通过阶段验收，follow-up 项留待后续批次处理。
+
+- Batch 1（阶段验收通过）：
   - `0003_training_calendar.sql`（forward-only）：新增 `planned_workouts` 表（id、scheduled_local_date、workout_type、title、notes、target_distance_meters、target_duration_seconds、created_at、updated_at）与 `scheduled_local_date` 索引；不改 activities，不复制实际活动。
   - `GET /api/calendar?from&to`：闭区间（最多 93 天），同时返回计划训练与有界实际活动摘要（无 samples/laps/sources），SQL 内过滤、固定查询。
   - `POST /api/planned-workouts`、`PATCH /api/planned-workouts/:id`（至少一个字段，更新 updatedAt）、`DELETE /api/planned-workouts/:id`（204；只删 planned workout，不影响活动或导入数据）。
   - 训练类型：EASY_RUN、LONG_RUN、TEMPO_RUN、INTERVAL_RUN、RECOVERY_RUN、RACE、STRENGTH、REST、OTHER；REST/STRENGTH/OTHER 允许无目标，跑步类型本批也不强制目标。
   - 单位语义：API 存储米、秒；前端输入 km 与小时/分钟，提交前换算；标题 trim 后 1–120 字符；notes ≤2000；目标必须是有限正数或空。
   - `/calendar` 月视图：周一为每周第一天，含相邻月补齐（35 或 42 天网格），月份保存在 URL（`?month=YYYY-MM`），非法回退当前月；窄屏为 agenda 列表；计划与实际活动视觉区分，实际活动只读并链接到详情。
-- Batch 2 已实现（等待 reviewer 验收）：计划完成状态、人工一对一关联、执行率与周汇总。
+- Batch 2（阶段验收通过）：计划完成状态、人工一对一关联、执行率与周汇总。
   - `0004_plan_completion.sql`（forward-only）：`planned_workouts` 增加 `completion_status TEXT NOT NULL DEFAULT 'PLANNED'` 与 `linked_activity_id TEXT NULL REFERENCES activities(id) ON DELETE SET NULL`；新增 `linked_activity_id` 部分唯一索引（一个 activity 最多关联一个计划，多个 NULL 允许）与 `(scheduled_local_date, completion_status)` 汇总索引。不改 0000–0003；旧行升级后为 `PLANNED`；migration 重复执行幂等。
   - 状态模型：`PLANNED | COMPLETED | SKIPPED`。关联活动必须变为 `COMPLETED`；`COMPLETED` 允许无关联（人工完成）；改为 `PLANNED`/`SKIPPED` 必须清除关联；可更换或解除关联；删除计划只删计划及关联，不触碰活动、source、sample、lap 或导入历史；底层删除活动时外键 `ON DELETE SET NULL`，`COMPLETED` 保留并退化为人工完成。“已逾期”是 `PLANNED + scheduledLocalDate < 今天` 的派生显示，不是数据库状态。
   - 关联是一对一人工操作：一个计划最多关联一个活动、一个活动最多关联一个计划；不做自动匹配、自动推荐或模糊匹配；同一活动已被其他计划关联时返回 `409 ACTIVITY_ALREADY_LINKED`，不静默抢占。本批不支持一计划多活动或一活动拆多计划。
@@ -87,12 +89,27 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
   - 前端：计划条目显示文字 badge（待完成/已完成/已跳过/已逾期，其中逾期为派生显示）并用样式区分；编辑对话框提供 标记为已完成、关联实际活动并完成（候选复用当前日历范围内已加载活动，展示日期/名称/类型/距离/时长）、标记为已跳过、恢复为待完成、解除活动关联；`COMPLETED` 状态下可直接 补充关联活动（人工完成无关联时）或 更换关联活动（已有关联时），状态保持 `COMPLETED`，无需先恢复待完成；`SKIPPED` 不直接关联，须先恢复待完成。已关联活动显示摘要并可跳转详情；409 显示可读错误；completion 与 metadata 保存互不覆盖；mutation 后刷新 calendar 与 training-summary 查询。月度执行率只按真实月首到月末请求（不含网格补位日期），展示本月计划数、已完成数、已跳过/逾期数、执行率与按周汇总紧凑表格，含 loading/error/empty 与 `adherenceRate = null`（“暂无可计算计划”）状态；窄屏用紧凑列表，不横向溢出、不依赖 hover。
   - 本批不做：自动匹配建议、拖拽关联、批量完成、多活动关联、按距离/时间/标题自动判断完成。
 
+### 当前里程碑 M5（运动员档案与每日训练上下文，进行中）
+
+总体目标：补齐运动员档案与每日状态，之后把每日状态、今天的计划和近期计划接入 Dashboard，形成“每天打开应用 → 查看计划 → 记录状态 → 完成训练 → 关联活动”的日常使用闭环。每日状态是用户自报数据，不产生任何医疗判断、readiness/recovery 综合评分或自动训练调整。
+
+- Batch 1 已实现（等待 reviewer 验收）：运动员档案字段与每日状态的数据/API 基础，本批不含任何前端。
+  - `0005_daily_training_context.sql`（forward-only，不改 0000–0004；重复执行幂等）：
+    - `athlete_settings` 新增 `display_name`（trim 后 1–80）、`experience_level`（BEGINNER/INTERMEDIATE/ADVANCED/null）、`primary_goal`（trim 后 1–200，仅保存用户自述目标，不做 AI 解析）、`weekly_distance_target_meters`（正整数 ≤ 1,000,000 米/周，前端负责 km 换算）；旧数据升级后新字段均为 NULL，原字段不丢失。
+    - 新增 `daily_status_entries`：id (UUID)、`local_date`（唯一索引）、sleep_quality / fatigue_level / muscle_soreness_level / stress_level / motivation_level（可空 1–5，5 表示程度最强）、resting_heart_rate_bpm（可空 30–220）、notes（可空 ≤2000 字符）、created_at、updated_at；DB 层含 CHECK 约束。无 athleteId（单用户本地应用），无 readinessScore/injuryRisk 等派生或医疗字段。
+  - `PATCH /api/settings/athlete`（沿用现有端点）增加档案字段：`null` 显式清空、缺省不改、trim 后空串被拒绝（不会把空字符串写入数据库）；原心率/单位/时区字段语义不变；校验全部来自 `packages/shared` 的 Zod schema。
+  - `GET /api/daily-status?from&to`：闭区间（`from <= to`，≤93 天，否则 `400 INVALID_DAILY_STATUS_QUERY`），按 `local_date` 升序，不生成空 entry，无数据返回空数组。
+  - `PUT /api/daily-status/:localDate`：真正的原子 upsert（localDate 由 path 提供，body 不重复传日期；重复提交不产生第二条记录）；`createdAt` 更新时保持不变、`updatedAt` 刷新；缺省字段保留原值、显式 `null` 清空；至少提供一个可编辑字段；未知字段被拒绝（strict schema）；非法日期或 body → `400 INVALID_DAILY_STATUS`。禁止 NaN、Infinity、小数和范围外数值。
+  - `DELETE /api/daily-status/:localDate`：成功 204；不存在 404 `NOT_FOUND`；不触碰 activity、planned workout、source、sample、lap 或导入历史。
+  - 性能与隔离：范围查询在 SQL 中按唯一 `local_date` 索引过滤，固定查询数、无 N+1、不读取 samples；Daily Status 不进入 canonical activity / immutable source 模型，不影响 `USER > FIT > PARROTAO > CSV` 字段优先级。
+  - 本批不做：Daily Status 前端页面或表单（属于后续 Batch）、Dashboard 每日状态卡片、Dashboard 今日/近期计划、自动训练建议、readiness/recovery 评分、根据每日状态自动调整计划、医疗或受伤风险判断、自动关联计划与活动。
+
 ### 冻结不做（跨里程碑有效）
 
 - AI 自动生成训练计划、DeepSeek/OpenAI 或其他模型接入。
 - 手表下发或 Garmin Connect 写入。
 - 成就系统。
-- 每日状态/疲劳打卡。
+- 每日状态的社交化打卡、基于每日状态的自动计划调整或医疗结论（M5 Batch 1 已批准自报每日状态的数据模型与 API，不含任何派生结论）。
 - ParroTao 在线同步的实际网络实现。
 - DeepSeek、Codex App Server 或任何 AI 教练。
 - 登录、多用户、社交、云同步。
@@ -134,7 +151,7 @@ RunCoach/
 │  ├─ PROJECT_CONTEXT.md
 │  └─ adr/                      # FIT decoder、SQLite driver、导入身份/决议 ADR
 ├─ apps/server/
-│  ├─ drizzle/                  # 0000 initial、0001 import hardening、0002 activity analysis、0003 training calendar、0004 plan completion
+│  ├─ drizzle/                  # 0000 initial、0001 import hardening、0002 activity analysis、0003 training calendar、0004 plan completion、0005 daily training context
 │  └─ src/
 │     ├─ app.ts                 # Fastify 路由和输入校验
 │     ├─ config.ts              # 本地路径、端口、时区 offset、上传上限
@@ -206,8 +223,11 @@ RunCoach/
 | `GET /api/activities/:activityId`                   | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples**            |
 | `PATCH /api/activities/:activityId`                 | 修改名称/备注并标记 USER provenance                                                                      |
 | `GET /api/activities/:activityId/series`            | 有界时序：`metrics/from/to/maxPoints`，SQL 范围过滤 + 服务端确定性降采样，不返回完整 samples             |
-| `GET /api/settings/athlete`                         | 返回单行运动员设置                                                                                       |
-| `PATCH /api/settings/athlete`                       | 局部更新运动员设置（最大/静息/阈值心率、时区 offset 等），至少一个字段                                   |
+| `GET /api/settings/athlete`                         | 返回单行运动员设置（含 displayName、experienceLevel、primaryGoal、weeklyDistanceTargetMeters）           |
+| `PATCH /api/settings/athlete`                       | 局部更新运动员设置（心率、时区、单位与档案字段；档案字段可用 null 清空），至少一个字段                   |
+| `GET /api/daily-status`                             | 闭区间（≤93 天）每日状态范围查询，按 local_date 升序；非法请求 400 `INVALID_DAILY_STATUS_QUERY`          |
+| `PUT /api/daily-status/:localDate`                  | 按 localDate 原子 upsert；缺省保留、null 清空；非法请求 400 `INVALID_DAILY_STATUS`                       |
+| `DELETE /api/daily-status/:localDate`               | 删除当日每日状态（204）；不存在 404 `NOT_FOUND`；不影响活动/计划/导入数据                                |
 | `POST /api/imports/csv`                             | 单文件 multipart CSV 导入                                                                                |
 | `POST /api/imports/fit`                             | 单文件 multipart FIT 导入                                                                                |
 | `GET /api/imports/pending?limit&cursor`             | 待确认项游标分页                                                                                         |
@@ -423,7 +443,7 @@ M2 已完成：正式 router、页面级组件拆分（pages/）、统一格式�
 - 暂无删除活动、撤销误合并、备份/恢复。
 - 页面级错误边界仍不是正式能力。
 - Garmin FIT SDK 的许可证适用于当前私有/个人阶段；任何重新分发前必须重新评估，当前不支持正式 distribution。
-- `0001_import_hardening.sql`、`0002_activity_analysis.sql`、`0003_training_calendar.sql`、`0004_plan_completion.sql` 均为 forward-only；升级旧数据前应备份 data directory。
+- `0001_import_hardening.sql`、`0002_activity_analysis.sql`、`0003_training_calendar.sql`、`0004_plan_completion.sql`、`0005_daily_training_context.sql` 均为 forward-only；升级旧数据前应备份 data directory。
 
 ## 16. M1 最终验收状态
 

@@ -9,6 +9,10 @@ import {
   athleteSettingsPatchSchema,
   calendarQuerySchema,
   calendarResponseSchema,
+  dailyStatusRangeQuerySchema,
+  dailyStatusRangeResponseSchema,
+  dailyStatusEntrySchema,
+  dailyStatusUpsertSchema,
   dashboardResponseSchema,
   plannedWorkoutCompletionPatchSchema,
   plannedWorkoutCreateSchema,
@@ -195,6 +199,45 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (!body.success)
       return reply.code(400).send({ code: 'INVALID_ATHLETE_SETTINGS', message: '运动员设置无效' });
     return dependencies.repository.updateAthleteSettings(body.data);
+  });
+
+  const localDateParamsSchema = z.object({ localDate: z.iso.date() });
+
+  app.get('/api/daily-status', async (request, reply) => {
+    const query = dailyStatusRangeQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({
+        code: 'INVALID_DAILY_STATUS_QUERY',
+        message: '每日状态查询参数无效',
+      });
+    }
+    const items = dependencies.repository.listDailyStatusEntries(query.data.from, query.data.to);
+    return dailyStatusRangeResponseSchema.parse({
+      from: query.data.from,
+      to: query.data.to,
+      items,
+    });
+  });
+
+  app.put('/api/daily-status/:localDate', async (request, reply) => {
+    const params = localDateParamsSchema.safeParse(request.params);
+    const body = dailyStatusUpsertSchema.safeParse(request.body);
+    if (!params.success || !body.success) {
+      return reply.code(400).send({ code: 'INVALID_DAILY_STATUS', message: '每日状态内容无效' });
+    }
+    return dailyStatusEntrySchema.parse(
+      dependencies.repository.upsertDailyStatusEntry(params.data.localDate, body.data),
+    );
+  });
+
+  app.delete('/api/daily-status/:localDate', async (request, reply) => {
+    const params = localDateParamsSchema.safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ code: 'INVALID_DAILY_STATUS', message: '每日状态日期无效' });
+    }
+    const deleted = dependencies.repository.deleteDailyStatusEntry(params.data.localDate);
+    if (!deleted) return reply.code(404).send({ code: 'NOT_FOUND', message: '每日状态不存在' });
+    return reply.code(204).send();
   });
 
   app.post('/api/imports/csv', async (request, reply) => {

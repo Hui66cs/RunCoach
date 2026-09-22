@@ -34,6 +34,8 @@ import type {
   TrainingSummaryQuery,
   TrainingSummaryResponse,
   TrainingSummaryCounts,
+  DailyStatusEntry,
+  DailyStatusUpsert,
 } from '@runcoach/shared';
 import {
   importOutcomeSchema,
@@ -70,6 +72,7 @@ import {
   activitySamples,
   activitySources,
   athleteSettings,
+  dailyStatusEntries,
   importItems,
   importJobs,
   plannedWorkouts,
@@ -1712,6 +1715,108 @@ export class ActivityRepository {
       heartRateZoneMethod: 'MAX_HR_PERCENT',
       distanceUnit: 'METRIC',
       timezoneOffsetMinutes: row.timezoneOffsetMinutes,
+      displayName: row.displayName,
+      experienceLevel: (row.experienceLevel ?? null) as AthleteSettings['experienceLevel'],
+      primaryGoal: row.primaryGoal,
+      weeklyDistanceTargetMeters: row.weeklyDistanceTargetMeters,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  /**
+   * Bounded daily-status range query. One SQL statement filtered by the
+   * closed local-date range, ascending by `local_date` (covered by the unique
+   * `local_date` index); no per-entry lookups, no samples.
+   */
+  listDailyStatusEntries(from: string, to: string): DailyStatusEntry[] {
+    const rows = this.db
+      .select()
+      .from(dailyStatusEntries)
+      .where(and(gte(dailyStatusEntries.localDate, from), lte(dailyStatusEntries.localDate, to)))
+      .orderBy(asc(dailyStatusEntries.localDate))
+      .all();
+    return rows.map((row) => this.toDailyStatusEntry(row));
+  }
+
+  /**
+   * Atomic upsert keyed by the unique `local_date`: absent fields keep their
+   * stored value, explicit nulls clear a field, `createdAt` survives updates
+   * and `updatedAt` always refreshes. The unique index guarantees a second
+   * row for the same date can never exist.
+   */
+  upsertDailyStatusEntry(localDate: string, patch: DailyStatusUpsert): DailyStatusEntry {
+    return this.db.transaction((tx) => {
+      const timestamp = now();
+      const existing = tx
+        .select()
+        .from(dailyStatusEntries)
+        .where(eq(dailyStatusEntries.localDate, localDate))
+        .get();
+      if (existing === undefined) {
+        tx.insert(dailyStatusEntries)
+          .values({
+            id: randomUUID(),
+            localDate,
+            sleepQuality: patch.sleepQuality ?? null,
+            fatigueLevel: patch.fatigueLevel ?? null,
+            muscleSorenessLevel: patch.muscleSorenessLevel ?? null,
+            stressLevel: patch.stressLevel ?? null,
+            motivationLevel: patch.motivationLevel ?? null,
+            restingHeartRateBpm: patch.restingHeartRateBpm ?? null,
+            notes: patch.notes ?? null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          })
+          .run();
+      } else {
+        const updates: Record<string, unknown> = {};
+        if ('sleepQuality' in patch) updates['sleepQuality'] = patch.sleepQuality ?? null;
+        if ('fatigueLevel' in patch) updates['fatigueLevel'] = patch.fatigueLevel ?? null;
+        if ('muscleSorenessLevel' in patch) {
+          updates['muscleSorenessLevel'] = patch.muscleSorenessLevel ?? null;
+        }
+        if ('stressLevel' in patch) updates['stressLevel'] = patch.stressLevel ?? null;
+        if ('motivationLevel' in patch) updates['motivationLevel'] = patch.motivationLevel ?? null;
+        if ('restingHeartRateBpm' in patch) {
+          updates['restingHeartRateBpm'] = patch.restingHeartRateBpm ?? null;
+        }
+        if ('notes' in patch) updates['notes'] = patch.notes ?? null;
+        tx.update(dailyStatusEntries)
+          .set({ ...updates, updatedAt: timestamp })
+          .where(eq(dailyStatusEntries.localDate, localDate))
+          .run();
+      }
+      const row = tx
+        .select()
+        .from(dailyStatusEntries)
+        .where(eq(dailyStatusEntries.localDate, localDate))
+        .get();
+      if (row === undefined) throw new Error('写入每日状态后无法读取记录');
+      return this.toDailyStatusEntry(row);
+    });
+  }
+
+  /** Deletes the entry for one local date; returns false when none exists. */
+  deleteDailyStatusEntry(localDate: string): boolean {
+    const result = this.db
+      .delete(dailyStatusEntries)
+      .where(eq(dailyStatusEntries.localDate, localDate))
+      .run();
+    return result.changes === 1;
+  }
+
+  private toDailyStatusEntry(row: typeof dailyStatusEntries.$inferSelect): DailyStatusEntry {
+    return {
+      id: row.id,
+      localDate: row.localDate,
+      sleepQuality: row.sleepQuality,
+      fatigueLevel: row.fatigueLevel,
+      muscleSorenessLevel: row.muscleSorenessLevel,
+      stressLevel: row.stressLevel,
+      motivationLevel: row.motivationLevel,
+      restingHeartRateBpm: row.restingHeartRateBpm,
+      notes: row.notes,
+      createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
   }

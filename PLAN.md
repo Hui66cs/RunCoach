@@ -4,7 +4,9 @@
 
 M1/M1.1 and M2 are complete and frozen. M2.1 is complete: a repeatable performance baseline was established and accepted; premature optimization is deferred and the baseline remains in `docs/M2_1_PERFORMANCE_BASELINE.md`. M3 is complete and reviewer-accepted: Dashboard homepage, 12/26/52-week cross-activity trends, and activity-level canonical average heart rate weighted by effective moving duration; record-level heart-rate trends are explicitly future scope.
 
-The approved current milestone is M4: training calendar and local training plans.
+M4 (training calendar and local training plans) has completed stage acceptance with the verdict PASS WITH FOLLOW-UP: Batch 1 (calendar, planned-workout CRUD, calendar projection) and Batch 2 (plan completion status, manual one-to-one plan-to-activity links, adherence rate, weekly rollups) are both accepted at milestone-stage level, with follow-up items recorded for future batches.
+
+The approved current milestone is M5: athlete profile and daily training context. Its overall goal is the daily-use loop — open the app, see today's plan, record daily status, complete the training, and link the activity — by (1) completing the athlete profile and daily status data model, (2) later surfacing daily status, today's plan, and recent plans on the Dashboard, and (3) keeping all determinism, privacy, and no-AI/no-medical rules intact.
 
 ### M3 scope and batches (completed and reviewer-accepted)
 
@@ -15,8 +17,8 @@ M3 statistics scope: only `activityType = RUN` counts towards volume; windows ar
 
 ### M4 scope and batches
 
-1. [x] Batch 1: training calendar (`/calendar`), `0003_training_calendar.sql` with the `planned_workouts` table, planned-workout CRUD APIs, and the calendar projection of actual activities. **Reviewer-accepted.**
-2. [x] Batch 2: plan completion status, manual one-to-one plan-to-activity links, adherence rate, and weekly rollups. **Implemented, awaiting reviewer acceptance.**
+1. [x] Batch 1: training calendar (`/calendar`), `0003_training_calendar.sql` with the `planned_workouts` table, planned-workout CRUD APIs, and the calendar projection of actual activities. **Stage-accepted (M4 verdict: PASS WITH FOLLOW-UP).**
+2. [x] Batch 2: plan completion status, manual one-to-one plan-to-activity links, adherence rate, and weekly rollups. **Stage-accepted (M4 verdict: PASS WITH FOLLOW-UP).**
 
 M4 Batch 2 design record:
 
@@ -30,6 +32,21 @@ M4 Batch 2 design record:
 - Still out of scope: automatic matching/suggestions, drag-and-drop or batch completion, one-plan-to-many-activities links, AI-generated plans, watch/Garmin writes, and all excluded items below.
 
 M4 excludes AI-generated plans, watch/Garmin Connect writes, and all other items in the excluded list below.
+
+### M5 scope and batches
+
+Overall goal: complete the athlete profile and daily training context, then connect daily status, today's plan, and recent plans into the Dashboard so the daily loop becomes: open the app → view the plan → record status → complete the training → link the activity.
+
+1. [x] Batch 1: athlete profile fields and daily status data/API foundation — **implemented, awaiting reviewer acceptance**. Delivered:
+   - `0005_daily_training_context.sql` (forward-only, 0000–0004 untouched): adds `display_name`, `experience_level` (`BEGINNER|INTERMEDIATE|ADVANCED`, nullable), `primary_goal`, and `weekly_distance_target_meters` (positive integer ≤ 1,000,000 meters, frontend converts to km) to `athlete_settings`; creates `daily_status_entries` with a unique `local_date` index, five nullable 1–5 self-report scales (sleep quality, fatigue, muscle soreness, stress, motivation), resting heart rate 30–220, notes ≤ 2000 chars, and DB CHECK constraints. No `athleteId`, no readiness/recovery/injury-risk fields.
+   - `PATCH /api/settings/athlete` (existing endpoint) now also accepts the profile fields; explicit `null` clears them; trimmed empty strings are rejected so empty values never reach the database.
+   - `GET /api/daily-status?from&to`: closed local-date range, `from <= to`, at most 93 days, ascending by `local_date`, no zero-filling; invalid query → `400 INVALID_DAILY_STATUS_QUERY`.
+   - `PUT /api/daily-status/:localDate`: atomic upsert keyed by the unique date (repeat submissions never create a second row); `createdAt` survives updates, `updatedAt` refreshes; absent fields keep their value, explicit `null` clears a field; at least one editable field required; unknown fields rejected; invalid date/body → `400 INVALID_DAILY_STATUS`.
+   - `DELETE /api/daily-status/:localDate`: 204 on success, `404 NOT_FOUND` when missing; never touches activities, planned workouts, sources, samples, laps, or import history.
+   - Range queries filter in SQL over the unique `local_date` index with a fixed query count (no N+1) and never read samples.
+2. [ ] Batch 2 (not started): daily-status UI entry point (frontend form), Dashboard daily-status card, today's plan, and recent plans — frontend work only; Batch 1 deliberately ships no UI.
+
+M5 still excludes: readiness/recovery composite scores, training advice or automatic plan adjustments, medical or injury judgements, auto-linking plans to activities, and every item in the excluded list below.
 
 ### M2 included
 
@@ -77,8 +94,10 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M2.1 closed: baseline accepted, premature optimization deferred with risks recorded.
 - [x] M3 Batch 1: Dashboard homepage with bounded dashboard API, stats, weekly trend, and recent activities.
 - [x] M3 Batch 2 and M3 acceptance: cross-activity trends page verified by reviewer.
-- [x] M4 Batch 1: training calendar, planned-workout CRUD, and calendar projection (reviewer-accepted).
-- [x] M4 Batch 2: plan completion status, one-to-one manual activity links, adherence rate, weekly rollups, and E2E coverage (implemented, awaiting reviewer acceptance; M4 as a whole is not yet accepted).
+- [x] M4 Batch 1: training calendar, planned-workout CRUD, and calendar projection (stage-accepted; M4 verdict PASS WITH FOLLOW-UP).
+- [x] M4 Batch 2: plan completion status, one-to-one manual activity links, adherence rate, weekly rollups, and E2E coverage (stage-accepted; M4 verdict PASS WITH FOLLOW-UP).
+- [x] M4 stage acceptance recorded (PASS WITH FOLLOW-UP); M5 approved as the current milestone.
+- [x] M5 Batch 1: athlete profile fields and daily status data/API foundation (implemented, awaiting reviewer acceptance).
 
 ## M2 implementation record
 

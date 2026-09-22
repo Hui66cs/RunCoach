@@ -636,6 +636,9 @@ export const trainingSummaryResponseSchema = z.object({
 });
 export type TrainingSummaryResponse = z.infer<typeof trainingSummaryResponseSchema>;
 
+export const experienceLevelSchema = z.enum(['BEGINNER', 'INTERMEDIATE', 'ADVANCED']);
+export type ExperienceLevel = z.infer<typeof experienceLevelSchema>;
+
 export const athleteSettingsPatchSchema = z
   .object({
     maxHeartRateBpm: z.number().int().min(100).max(240).nullable().optional(),
@@ -644,6 +647,12 @@ export const athleteSettingsPatchSchema = z
     heartRateZoneMethod: z.literal('MAX_HR_PERCENT').optional(),
     distanceUnit: z.literal('METRIC').optional(),
     timezoneOffsetMinutes: z.number().int().min(-840).max(840).optional(),
+    // Athlete profile (M5): null clears a field; trimmed empty strings are
+    // rejected so an empty value never reaches the database.
+    displayName: z.string().trim().min(1).max(80).nullable().optional(),
+    experienceLevel: experienceLevelSchema.nullable().optional(),
+    primaryGoal: z.string().trim().min(1).max(200).nullable().optional(),
+    weeklyDistanceTargetMeters: z.number().int().positive().max(1_000_000).nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: 'At least one setting is required',
@@ -657,5 +666,76 @@ export interface AthleteSettings {
   heartRateZoneMethod: 'MAX_HR_PERCENT';
   distanceUnit: 'METRIC';
   timezoneOffsetMinutes: number;
+  displayName: string | null;
+  experienceLevel: ExperienceLevel | null;
+  primaryGoal: string | null;
+  weeklyDistanceTargetMeters: number | null;
   updatedAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// Daily status (M5): one self-reported entry per athlete local date. Purely
+// user-editable observations — no derived readiness/recovery score, training
+// advice, or medical judgement exists anywhere in this contract.
+// ---------------------------------------------------------------------------
+
+/** Shared 1–5 self-report scale; null means "not filled in". */
+export const dailyStatusScaleSchema = z.number().int().min(1).max(5).nullable();
+
+export const dailyStatusEntrySchema = z.object({
+  id: z.string().uuid(),
+  localDate: z.iso.date(),
+  sleepQuality: dailyStatusScaleSchema,
+  fatigueLevel: dailyStatusScaleSchema,
+  muscleSorenessLevel: dailyStatusScaleSchema,
+  stressLevel: dailyStatusScaleSchema,
+  motivationLevel: dailyStatusScaleSchema,
+  restingHeartRateBpm: z.number().int().min(30).max(220).nullable(),
+  notes: z.string().max(2000).nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type DailyStatusEntry = z.infer<typeof dailyStatusEntrySchema>;
+
+/**
+ * Upsert body for one local date (the date itself comes from the URL path).
+ * Absent fields keep their stored value; explicit nulls clear a field. At
+ * least one editable field is required; unknown fields are rejected.
+ */
+export const dailyStatusUpsertSchema = z
+  .strictObject({
+    sleepQuality: dailyStatusScaleSchema.optional(),
+    fatigueLevel: dailyStatusScaleSchema.optional(),
+    muscleSorenessLevel: dailyStatusScaleSchema.optional(),
+    stressLevel: dailyStatusScaleSchema.optional(),
+    motivationLevel: dailyStatusScaleSchema.optional(),
+    restingHeartRateBpm: z.number().int().min(30).max(220).nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: '至少需要提供一个每日状态字段',
+  });
+export type DailyStatusUpsert = z.infer<typeof dailyStatusUpsertSchema>;
+
+export const dailyStatusRangeQuerySchema = z
+  .object({
+    from: z.iso.date(),
+    to: z.iso.date(),
+  })
+  .refine((value) => value.from <= value.to, {
+    message: 'from 不能晚于 to',
+  })
+  .refine(
+    (value) =>
+      (Date.parse(`${value.to}T00:00:00Z`) - Date.parse(`${value.from}T00:00:00Z`)) / 86_400_000 <=
+      MAX_CALENDAR_DAYS - 1,
+    { message: `日期范围最多 ${MAX_CALENDAR_DAYS} 天` },
+  );
+export type DailyStatusRangeQuery = z.infer<typeof dailyStatusRangeQuerySchema>;
+
+export const dailyStatusRangeResponseSchema = z.object({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  items: z.array(dailyStatusEntrySchema),
+});
+export type DailyStatusRangeResponse = z.infer<typeof dailyStatusRangeResponseSchema>;
