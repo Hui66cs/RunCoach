@@ -1,6 +1,6 @@
 # RunCoach Local
 
-RunCoach Local is a single-user, local-first running activity manager. The current version is intentionally limited to a vertical slice that imports a supplied CSV summary, upgrades matching activities with FIT data, and displays the resulting sources, laps, and series.
+RunCoach Local is a single-user, local-first running activity manager. M1/M1.1 provide durable CSV/FIT import and canonical merging. M2 adds formal activity browsing, bounded time-series retrieval, deterministic single-run analysis, and local athlete settings without sending private data to external services.
 
 ## Requirements
 
@@ -54,12 +54,25 @@ pnpm db:migrate
 
 Runtime data defaults to `.local-data` in development. Override it with `RUNCOACH_DATA_DIR`. CSV timestamps use `RUNCOACH_LOCAL_OFFSET_MINUTES`, defaulting to `480` (`+08:00`).
 
+Before applying a new migration to an existing data directory, stop the development server and copy the complete data directory as a backup. M2 migration `0002_activity_analysis.sql` is additive and forward-only.
+
 ## Import management
 
 The UI has Activity, Pending, and Import History views. Medium-confidence FIT matches can be attached to a recorded candidate, created as a new activity, or skipped. Resolution always re-reads and verifies the retained FIT file. CSV re-exports use a stable activity identity, so renaming or reordering an export does not duplicate canonical activities; changed rows create immutable source revisions.
 
+## M2 application
+
+- `/activities`: paginated, filterable formal activity list.
+- `/activities/:activityId`: summary, native/derived splits, deterministic analysis, bounded interactive charts, offline route outline, and folded data provenance.
+- `/imports`: the complete M1.1 upload, pending-resolution, and history loop.
+- `/settings`: local athlete heart-rate and timezone settings used by deterministic analysis.
+
+Complete samples remain in SQLite. Activity detail metadata does not return them; `/series` applies SQL range filtering and bounded deterministic downsampling.
+
+Charts render pace on a dedicated inverted `min/km` axis. Acceptance results, API changes, and manual verification steps are recorded in `docs/M2_ACCEPTANCE.md`.
+
 ## Current limitations
 
-- No dashboard, training plan, ParroTao online sync, AI coach, authentication, backup/restore, or formal map.
+- No dashboard, cross-activity trends, training plan/calendar, ParroTao online sync, AI coach, authentication, backup/restore, online map, or medical conclusions.
 - A source system without an activity ID cannot distinguish two activities of the same type starting in the same UTC second. A collision within one CSV is rejected explicitly.
 - Distribution is not supported because the selected Garmin FIT SDK has license restrictions that require review before redistribution.

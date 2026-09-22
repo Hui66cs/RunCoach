@@ -55,7 +55,10 @@ describe('CSV to FIT integration', () => {
 
     const csvOnly = repository.getActivity(canonicalId);
     expect(csvOnly?.hasTimeSeries).toBe(false);
-    expect(csvOnly?.samples).toHaveLength(0);
+    expect(
+      repository.getActivitySeries(canonicalId, { metrics: ['heartRate'], maxPoints: 1000 })
+        ?.points,
+    ).toHaveLength(0);
     expect(csvOnly?.sourceTypes).toEqual(['CSV']);
     expect(csvOnly?.sources[0]?.rawFilePath).not.toBeNull();
     expect(fs.existsSync(path.join(directory, csvOnly?.sources[0]?.rawFilePath ?? 'missing'))).toBe(
@@ -80,7 +83,10 @@ describe('CSV to FIT integration', () => {
     expect(repository.listActivities()).toHaveLength(1);
     expect(upgraded?.sourceTypes).toEqual(['CSV', 'FIT']);
     expect(upgraded?.hasTimeSeries).toBe(true);
-    expect(upgraded?.samples).toHaveLength(5);
+    expect(
+      repository.getActivitySeries(canonicalId, { metrics: ['heartRate'], maxPoints: 1000 })
+        ?.points,
+    ).toHaveLength(5);
     expect(upgraded?.laps).toHaveLength(1);
     expect(upgraded?.distanceMeters).toBeCloseTo(8009.29, 2);
     expect(upgraded?.durationSeconds).toBeCloseTo(3054.42, 2);
@@ -272,7 +278,12 @@ describe('CSV to FIT integration', () => {
       activityId: candidate.activityId,
     });
     expect(resolved.outcome).toBe('UPGRADED');
-    expect(repository.getActivity(candidate.activityId)?.samples).toHaveLength(5);
+    expect(
+      repository.getActivitySeries(candidate.activityId, {
+        metrics: ['heartRate'],
+        maxPoints: 1000,
+      })?.points,
+    ).toHaveLength(5);
     const replay = await service.resolveImport(itemId, {
       action: 'ATTACH',
       activityId: candidate.activityId,
@@ -315,7 +326,12 @@ describe('CSV to FIT integration', () => {
     const created = await service.resolveImport(itemId, { action: 'CREATE_NEW' });
     expect(created.outcome).toBe('CREATED');
     expect(repository.listActivities()).toHaveLength(3);
-    expect(repository.getActivity(created.activityId ?? '')?.samples).toHaveLength(5);
+    expect(
+      repository.getActivitySeries(created.activityId ?? '', {
+        metrics: ['heartRate'],
+        maxPoints: 1000,
+      })?.points,
+    ).toHaveLength(5);
     await expect(service.resolveImport(itemId, { action: 'SKIP' })).rejects.toMatchObject({
       code: 'ALREADY_RESOLVED',
     } satisfies Partial<RepositoryConflictError>);

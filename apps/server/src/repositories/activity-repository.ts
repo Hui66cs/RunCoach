@@ -1,9 +1,15 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, like, lt, lte, or, sql } from 'drizzle-orm';
 import type {
+  ActivityListPage,
+  ActivityListQuery,
   ActivityDetail,
   ActivityListItem,
   ActivityPatch,
+  ActivitySeriesQuery,
+  ActivitySeriesResponse,
+  AthleteSettings,
+  AthleteSettingsPatch,
   ImportOutcome,
   ImportHistoryPage,
   MatchDecision,
@@ -20,6 +26,17 @@ import {
   normalizedActivitySummarySchema,
 } from '@runcoach/shared';
 import { summarizeActivity, type ActivityMatchView } from '@runcoach/importers';
+import {
+  analyzePauses,
+  calculateAerobicDecoupling,
+  calculateHeartRateZones,
+  calculatePaceStability,
+  compareHalves,
+  deriveKilometerSplits,
+  deriveSummary,
+  downsampleSeries,
+  paceSecondsPerKilometer,
+} from '@runcoach/analytics';
 import type { RunCoachDatabase } from '../db/client.js';
 import {
   activities,
@@ -28,6 +45,7 @@ import {
   activityMergeEvents,
   activitySamples,
   activitySources,
+  athleteSettings,
   importItems,
   importJobs,
   rawFiles,
@@ -755,33 +773,115 @@ export class ActivityRepository {
   }
 
   listActivities(): ActivityListItem[] {
-    return this.db
+    const rows = this.db.select().from(activities).orderBy(desc(activities.startTimeUtc)).all();
+    const sources = this.db
+      .select({ activityId: activitySources.activityId, sourceType: activitySources.sourceType })
+      .from(activitySources)
+      .where(eq(activitySources.active, true))
+      .all();
+    const byActivity = new Map<string, SourceType[]>();
+    for (const source of sources) {
+      const values = byActivity.get(source.activityId) ?? [];
+      values.push(source.sourceType as SourceType);
+      byActivity.set(source.activityId, values);
+    }
+    return rows.map((activity) => ({
+      id: activity.id,
+      activityType: activity.activityType as ActivityListItem['activityType'],
+      startTimeUtc: activity.startTimeUtc,
+      localDate: activity.localDate,
+      name: activity.name,
+      notes: activity.notes,
+      distanceMeters: activity.distanceMeters,
+      durationSeconds: activity.durationSeconds,
+      movingDurationSeconds: activity.movingDurationSeconds,
+      averageHeartRateBpm: activity.averageHeartRateBpm,
+      maxHeartRateBpm: activity.maxHeartRateBpm,
+      hasTimeSeries: activity.hasTimeSeries,
+      sourceTypes: [...new Set(byActivity.get(activity.id) ?? [])],
+    }));
+  }
+
+  listActivitiesPage(query: ActivityListQuery): ActivityListPage {
+    const cursor = decodeCursor(query.cursor);
+    if (query.cursor !== undefined && cursor === null)
+      throw new RepositoryConflictError('INVALID_CURSOR', 'Invalid pagination cursor');
+    if (query.dateFrom !== undefined && query.dateTo !== undefined && query.dateFrom > query.dateTo)
+      throw new RepositoryConflictError('INVALID_DATE_RANGE', 'dateFrom must not exceed dateTo');
+    const filters = [
+      query.dateFrom === undefined ? undefined : gte(activities.localDate, query.dateFrom),
+      query.dateTo === undefined ? undefined : lte(activities.localDate, query.dateTo),
+      query.activityType === undefined
+        ? undefined
+        : eq(activities.activityType, query.activityType),
+      query.q === undefined || query.q === '' ? undefined : like(activities.name, `%${query.q}%`),
+      query.sourceType === undefined
+        ? undefined
+        : sql`exists (select 1 from activity_sources s where s.activity_id = ${activities.id} and s.active = 1 and s.source_type = ${query.sourceType})`,
+      cursor === null
+        ? undefined
+        : or(
+            lt(activities.startTimeUtc, cursor[0]),
+            and(eq(activities.startTimeUtc, cursor[0]), lt(activities.id, cursor[1])),
+          ),
+    ].filter((value) => value !== undefined);
+    const where = filters.length === 0 ? undefined : and(...filters);
+    const rows = this.db
       .select()
       .from(activities)
-      .orderBy(desc(activities.startTimeUtc))
-      .all()
-      .map((activity) => {
-        const sources = this.db
-          .select({ sourceType: activitySources.sourceType })
-          .from(activitySources)
-          .where(and(eq(activitySources.activityId, activity.id), eq(activitySources.active, true)))
-          .all();
-        return {
-          id: activity.id,
-          activityType: activity.activityType as ActivityListItem['activityType'],
-          startTimeUtc: activity.startTimeUtc,
-          localDate: activity.localDate,
-          name: activity.name,
-          notes: activity.notes,
-          distanceMeters: activity.distanceMeters,
-          durationSeconds: activity.durationSeconds,
-          movingDurationSeconds: activity.movingDurationSeconds,
-          averageHeartRateBpm: activity.averageHeartRateBpm,
-          maxHeartRateBpm: activity.maxHeartRateBpm,
-          hasTimeSeries: activity.hasTimeSeries,
-          sourceTypes: [...new Set(sources.map((source) => source.sourceType as SourceType))],
-        };
-      });
+      .where(where)
+      .orderBy(desc(activities.startTimeUtc), desc(activities.id))
+      .limit(query.limit + 1)
+      .all();
+    const pageRows = rows.slice(0, query.limit);
+    const ids = pageRows.map((row) => row.id);
+    const sourceRows =
+      ids.length === 0
+        ? []
+        : this.db
+            .select({
+              activityId: activitySources.activityId,
+              sourceType: activitySources.sourceType,
+            })
+            .from(activitySources)
+            .where(and(inArray(activitySources.activityId, ids), eq(activitySources.active, true)))
+            .all();
+    const sourceTypes = new Map<string, SourceType[]>();
+    for (const row of sourceRows) {
+      const values = sourceTypes.get(row.activityId) ?? [];
+      values.push(row.sourceType as SourceType);
+      sourceTypes.set(row.activityId, values);
+    }
+    const countFilters = filters.slice(0, cursor === null ? filters.length : filters.length - 1);
+    const total = this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(activities)
+      .where(countFilters.length === 0 ? undefined : and(...countFilters))
+      .get();
+    const items = pageRows.map((activity) => ({
+      id: activity.id,
+      activityType: activity.activityType as ActivityListItem['activityType'],
+      startTimeUtc: activity.startTimeUtc,
+      localDate: activity.localDate,
+      name: activity.name,
+      notes: activity.notes,
+      distanceMeters: activity.distanceMeters,
+      durationSeconds: activity.durationSeconds,
+      movingDurationSeconds: activity.movingDurationSeconds,
+      averageHeartRateBpm: activity.averageHeartRateBpm,
+      maxHeartRateBpm: activity.maxHeartRateBpm,
+      hasTimeSeries: activity.hasTimeSeries,
+      sourceTypes: [...new Set(sourceTypes.get(activity.id) ?? [])],
+    }));
+    const last = pageRows.at(-1);
+    return {
+      items,
+      total: Number(total?.count ?? 0),
+      nextCursor:
+        rows.length > query.limit && last !== undefined
+          ? encodeCursor(last.startTimeUtc, last.id)
+          : null,
+    };
   }
 
   getActivity(activityId: string): ActivityDetail | null {
@@ -805,6 +905,21 @@ export class ActivityRepository {
       .where(eq(activitySamples.activityId, activityId))
       .orderBy(asc(activitySamples.sequence))
       .all();
+    const normalizedSamples = samples.map((sample) => ({
+      sequence: sample.sequence,
+      timestampUtc: sample.timestampUtc,
+      elapsedSeconds: sample.elapsedSeconds,
+      distanceMeters: sample.distanceMeters,
+      speedMetersPerSecond: sample.speedMetersPerSecond,
+      heartRateBpm: sample.heartRateBpm,
+      cadenceStepsPerMinute: sample.cadenceStepsPerMinute,
+      powerWatts: sample.powerWatts,
+      altitudeMeters: sample.altitudeMeters,
+      latitudeDegrees: sample.latitudeDegrees,
+      longitudeDegrees: sample.longitudeDegrees,
+    }));
+    const settings = this.getAthleteSettings();
+    const splits = deriveKilometerSplits(normalizedSamples);
     const provenanceRows = this.db
       .select()
       .from(activityFieldProvenance)
@@ -858,19 +973,6 @@ export class ActivityRepository {
         maxHeartRateBpm: lap.maxHeartRateBpm,
         averageSpeedMetersPerSecond: lap.averageSpeedMetersPerSecond,
       })),
-      samples: samples.map((sample) => ({
-        sequence: sample.sequence,
-        timestampUtc: sample.timestampUtc,
-        elapsedSeconds: sample.elapsedSeconds,
-        distanceMeters: sample.distanceMeters,
-        speedMetersPerSecond: sample.speedMetersPerSecond,
-        heartRateBpm: sample.heartRateBpm,
-        cadenceStepsPerMinute: sample.cadenceStepsPerMinute,
-        powerWatts: sample.powerWatts,
-        altitudeMeters: sample.altitudeMeters,
-        latitudeDegrees: sample.latitudeDegrees,
-        longitudeDegrees: sample.longitudeDegrees,
-      })),
       provenance,
       mergeEvents: mergeEventRows.map((event) => ({
         id: event.id,
@@ -878,7 +980,121 @@ export class ActivityRepository {
         changedFields: changedFields(event.beforeSnapshot, event.afterSnapshot),
         createdAt: event.createdAt,
       })),
+      derivedSummary: deriveSummary(normalizedSamples),
+      analysis: {
+        splits,
+        halfComparison: compareHalves(normalizedSamples),
+        paceStability:
+          splits.value === null
+            ? {
+                status: 'UNAVAILABLE',
+                value: null,
+                reason: splits.reason,
+                dataQuality: splits.dataQuality,
+              }
+            : calculatePaceStability(splits.value),
+        heartRateZones: calculateHeartRateZones(normalizedSamples, settings.maxHeartRateBpm),
+        aerobicDecoupling: calculateAerobicDecoupling(normalizedSamples),
+        pauses: analyzePauses(normalizedSamples),
+      },
     };
+  }
+
+  getActivitySeries(activityId: string, query: ActivitySeriesQuery): ActivitySeriesResponse | null {
+    const activity = this.db
+      .select({ id: activities.id })
+      .from(activities)
+      .where(eq(activities.id, activityId))
+      .get();
+    if (activity === undefined) return null;
+    if (query.from !== undefined && query.to !== undefined && query.from >= query.to)
+      throw new RepositoryConflictError('INVALID_SERIES_RANGE', 'from must be less than to');
+    const filters = [
+      eq(activitySamples.activityId, activityId),
+      query.from === undefined ? undefined : gte(activitySamples.elapsedSeconds, query.from),
+      query.to === undefined ? undefined : lte(activitySamples.elapsedSeconds, query.to),
+    ].filter((value) => value !== undefined);
+    const rows = this.db
+      .select()
+      .from(activitySamples)
+      .where(and(...filters))
+      .orderBy(asc(activitySamples.sequence))
+      .all();
+    const normalized = rows.map((sample) => ({
+      sequence: sample.sequence,
+      timestampUtc: sample.timestampUtc,
+      elapsedSeconds: sample.elapsedSeconds,
+      distanceMeters: sample.distanceMeters,
+      speedMetersPerSecond: sample.speedMetersPerSecond,
+      heartRateBpm: sample.heartRateBpm,
+      cadenceStepsPerMinute: sample.cadenceStepsPerMinute,
+      powerWatts: sample.powerWatts,
+      altitudeMeters: sample.altitudeMeters,
+      latitudeDegrees: sample.latitudeDegrees,
+      longitudeDegrees: sample.longitudeDegrees,
+    }));
+    const points = downsampleSeries(normalized, query.maxPoints).map((sample) => ({
+      sequence: sample.sequence,
+      timestampUtc: sample.timestampUtc,
+      elapsedSeconds: sample.elapsedSeconds ?? null,
+      distanceMeters: sample.distanceMeters ?? null,
+      ...(query.metrics.includes('heartRate') ? { heartRateBpm: sample.heartRateBpm ?? null } : {}),
+      ...(query.metrics.includes('speed')
+        ? { speedMetersPerSecond: sample.speedMetersPerSecond ?? null }
+        : {}),
+      ...(query.metrics.includes('pace')
+        ? { paceSecondsPerKilometer: paceSecondsPerKilometer(sample.speedMetersPerSecond) }
+        : {}),
+      ...(query.metrics.includes('cadence')
+        ? { cadenceStepsPerMinute: sample.cadenceStepsPerMinute ?? null }
+        : {}),
+      ...(query.metrics.includes('power') ? { powerWatts: sample.powerWatts ?? null } : {}),
+      ...(query.metrics.includes('altitude')
+        ? { altitudeMeters: sample.altitudeMeters ?? null }
+        : {}),
+      ...(query.metrics.includes('gps')
+        ? {
+            latitudeDegrees: sample.latitudeDegrees ?? null,
+            longitudeDegrees: sample.longitudeDegrees ?? null,
+          }
+        : {}),
+    }));
+    return {
+      activityId,
+      metrics: query.metrics,
+      from: query.from ?? null,
+      to: query.to ?? null,
+      totalPoints: rows.length,
+      returnedPoints: points.length,
+      points,
+    };
+  }
+
+  getAthleteSettings(): AthleteSettings {
+    const row = this.db
+      .select()
+      .from(athleteSettings)
+      .where(eq(athleteSettings.id, 'default'))
+      .get();
+    if (row === undefined) throw new Error('Athlete settings row is missing');
+    return {
+      maxHeartRateBpm: row.maxHeartRateBpm,
+      restingHeartRateBpm: row.restingHeartRateBpm,
+      thresholdHeartRateBpm: row.thresholdHeartRateBpm,
+      heartRateZoneMethod: 'MAX_HR_PERCENT',
+      distanceUnit: 'METRIC',
+      timezoneOffsetMinutes: row.timezoneOffsetMinutes,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  updateAthleteSettings(patch: AthleteSettingsPatch): AthleteSettings {
+    this.db
+      .update(athleteSettings)
+      .set({ ...patch, updatedAt: now() })
+      .where(eq(athleteSettings.id, 'default'))
+      .run();
+    return this.getAthleteSettings();
   }
 
   getPendingRawContext(itemId: string): {

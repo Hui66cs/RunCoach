@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import type { ImportReport } from '@runcoach/shared';
+import type { ImportReport, NormalizedActivity } from '@runcoach/shared';
 import { buildApp } from '../src/app.js';
 import { openDatabase, type DatabaseContext } from '../src/db/client.js';
 import { applyMigrations } from '../src/db/migrate.js';
@@ -28,12 +28,15 @@ describe('import HTTP API', () => {
   let directory: string;
   let database: DatabaseContext;
   let app: FastifyInstance;
+  let repository: ActivityRepository;
+  let fileStore: RawFileStore;
 
   beforeEach(async () => {
     directory = fs.mkdtempSync(path.join(os.tmpdir(), 'runcoach-api-'));
     database = openDatabase(path.join(directory, 'runcoach.db'));
     applyMigrations(database.sqlite, path.resolve('apps/server/drizzle'));
-    const repository = new ActivityRepository(database.db);
+    repository = new ActivityRepository(database.db);
+    fileStore = new RawFileStore(directory);
     app = await buildApp({
       config: {
         host: '127.0.0.1',
@@ -44,7 +47,7 @@ describe('import HTTP API', () => {
         maxUploadBytes: 1024 * 1024,
       },
       repository,
-      importService: new ImportService(repository, new RawFileStore(directory), 480),
+      importService: new ImportService(repository, fileStore, 480),
     });
   });
 
@@ -86,5 +89,222 @@ describe('import HTTP API', () => {
       payload: { action: 'ATTACH', activityId: 'invalid' },
     });
     expect(invalidResolve.statusCode).toBe(400);
+  });
+
+  it('paginates and filters activities and rejects invalid queries', async () => {
+    const header = '活动类型,日期,标题,距离,时间';
+    const rows = [
+      '跑步,2026-09-18 17:24:55,晨跑,8.01,00:50:54',
+      '跑步,2026-09-19 07:00:00,节奏跑,5.00,00:25:00',
+      '跑步,2026-10-01 08:00:00,十月长跑,12.00,01:10:00',
+    ];
+    const upload = multipartFile(
+      'list.csv',
+      'text/csv',
+      Buffer.from(`${header}\n${rows.join('\n')}\n`),
+    );
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/imports/csv', ...upload })).statusCode,
+    ).toBe(200);
+
+    const first = await app.inject({ method: 'GET', url: '/api/activities?limit=2' });
+    expect(first.statusCode).toBe(200);
+    const page = first.json<{
+      items: Array<{ name: string }>;
+      total: number;
+      nextCursor: string | null;
+    }>();
+    expect(page.items).toHaveLength(2);
+    expect(page.total).toBe(3);
+    expect(page.nextCursor).toBeTypeOf('string');
+    const second = await app.inject({
+      method: 'GET',
+      url: `/api/activities?limit=2&cursor=${page.nextCursor}`,
+    });
+    expect(second.json<{ items: unknown[] }>().items).toHaveLength(1);
+    const filtered = await app.inject({
+      method: 'GET',
+      url: '/api/activities?q=%E8%8A%82%E5%A5%8F&dateFrom=2026-09-01&dateTo=2026-09-30&sourceType=CSV',
+    });
+    expect(
+      filtered.json<{ items: Array<{ name: string }> }>().items.map((item) => item.name),
+    ).toEqual(['节奏跑']);
+    expect((await app.inject({ method: 'GET', url: '/api/activities?limit=0' })).statusCode).toBe(
+      400,
+    );
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/activities?dateFrom=2026-10-01&dateTo=2026-09-01',
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+
+  it('returns an empty list and a summary-only activity without time series', async () => {
+    const empty = await app.inject({ method: 'GET', url: '/api/activities' });
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json<{ items: unknown[]; total: number; nextCursor: string | null }>()).toEqual({
+      items: [],
+      total: 0,
+      nextCursor: null,
+    });
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/activities?q=%E4%B8%8D%E5%AD%98%E5%9C%A8&dateFrom=2030-01-01',
+        })
+      ).json<{ items: unknown[] }>().items,
+    ).toHaveLength(0);
+
+    const upload = multipartFile(
+      'summary-only.csv',
+      'text/csv',
+      Buffer.from(
+        '活动类型,日期,标题,距离,时间\n跑步,2026-09-18 17:24:55,仅摘要,8.01,00:50:54\n',
+        'utf8',
+      ),
+    );
+    expect(
+      (await app.inject({ method: 'POST', url: '/api/imports/csv', ...upload })).statusCode,
+    ).toBe(200);
+
+    const listed = await app.inject({ method: 'GET', url: '/api/activities' });
+    const activity = listed
+      .json<{ items: Array<{ id: string; hasTimeSeries: boolean }> }>()
+      .items.at(0);
+    expect(activity?.hasTimeSeries).toBe(false);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/activities/${activity?.id}` });
+    expect(detail.statusCode).toBe(200);
+    const body = detail.json<{
+      laps: unknown[];
+      analysis: { splits: { status: string; reason: string | null } };
+      derivedSummary: { derivedMovingDurationSeconds: number | null };
+    }>();
+    expect(body).not.toHaveProperty('samples');
+    expect(body.laps).toHaveLength(0);
+    expect(body.analysis.splits.status).toBe('UNAVAILABLE');
+    expect(body.analysis.splits.reason).not.toBeNull();
+    expect(body.derivedSummary.derivedMovingDurationSeconds).toBeNull();
+
+    const series = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${activity?.id}/series`,
+    });
+    expect(series.statusCode).toBe(200);
+    expect(series.json<{ points: unknown[]; totalPoints: number }>()).toMatchObject({
+      totalPoints: 0,
+      points: [],
+    });
+  });
+
+  it('keeps detail bounded and serves SQL-ranged downsampled series', async () => {
+    const stored = fileStore.save(
+      Buffer.from('large synthetic fit'),
+      'large.fit',
+      'application/octet-stream',
+    );
+    const rawFileId = repository.ensureRawFile(stored);
+    const jobId = repository.createImportJob('FIT', 'large.fit', rawFileId);
+    const itemId = repository.createImportItem(jobId);
+    const normalized: NormalizedActivity = {
+      sourceType: 'FIT',
+      sourceExternalId: null,
+      activityType: 'RUN',
+      startTimeUtc: '2026-09-20T00:00:00.000Z',
+      originalStartTime: '2026-09-20T08:00:00+08:00',
+      timezoneOffsetMinutes: 480,
+      localDate: '2026-09-20',
+      name: 'Large series',
+      notes: null,
+      distanceMeters: 20000,
+      durationSeconds: 6000,
+      movingDurationSeconds: 5900,
+      averageHeartRateBpm: 150,
+      maxHeartRateBpm: 180,
+      deviceName: 'Synthetic',
+      laps: [],
+      rawSummary: {},
+      samples: Array.from({ length: 10000 }, (_, sequence) => ({
+        sequence,
+        timestampUtc: new Date(Date.UTC(2026, 8, 20, 0, 0, sequence)).toISOString(),
+        elapsedSeconds: sequence,
+        distanceMeters: sequence * 2,
+        speedMetersPerSecond: 2 + (sequence === 5000 ? 5 : 0),
+        heartRateBpm: sequence === 5000 ? 190 : 150,
+        cadenceStepsPerMinute: 170,
+        powerWatts: 220,
+        altitudeMeters: 50 + sequence / 1000,
+      })),
+    };
+    const created = repository.createActivityFromSource({
+      normalized,
+      rawFileId,
+      fileSha256: stored.sha256,
+      rawPayload: {},
+      importItemId: itemId,
+    });
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${created.activityId}`,
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json<Record<string, unknown>>()).not.toHaveProperty('samples');
+    const series = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${created.activityId}/series?metrics=heartRate,pace&from=4000&to=6000&maxPoints=100`,
+    });
+    const body = series.json<{
+      points: Array<{ elapsedSeconds: number }>;
+      totalPoints: number;
+      returnedPoints: number;
+    }>();
+    expect(series.statusCode).toBe(200);
+    expect(body.totalPoints).toBe(2001);
+    expect(body.returnedPoints).toBeLessThanOrEqual(100);
+    expect(
+      body.points.every((point) => point.elapsedSeconds >= 4000 && point.elapsedSeconds <= 6000),
+    ).toBe(true);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/api/activities/${created.activityId}/series?from=20&to=10`,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'GET',
+          url: '/api/activities/00000000-0000-4000-8000-000000000000/series',
+        })
+      ).statusCode,
+    ).toBe(404);
+  });
+
+  it('reads, validates, and partially updates athlete settings', async () => {
+    const initial = await app.inject({ method: 'GET', url: '/api/settings/athlete' });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json<{ maxHeartRateBpm: number | null }>().maxHeartRateBpm).toBeNull();
+    const updated = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings/athlete',
+      payload: { maxHeartRateBpm: 195 },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json<{ maxHeartRateBpm: number }>().maxHeartRateBpm).toBe(195);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: '/api/settings/athlete',
+          payload: { maxHeartRateBpm: 300 },
+        })
+      ).statusCode,
+    ).toBe(400);
   });
 });

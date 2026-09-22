@@ -230,3 +230,14 @@ export const activityMergeEvents = sqliteTable(
     }).onDelete('cascade'),
   ],
 );
+
+export const athleteSettings = sqliteTable('athlete_settings', {
+  id: text('id').primaryKey(),
+  maxHeartRateBpm: integer('max_heart_rate_bpm'),
+  restingHeartRateBpm: integer('resting_heart_rate_bpm'),
+  thresholdHeartRateBpm: integer('threshold_heart_rate_bpm'),
+  heartRateZoneMethod: text('heart_rate_zone_method').notNull().default('MAX_HR_PERCENT'),
+  distanceUnit: text('distance_unit').notNull().default('METRIC'),
+  timezoneOffsetMinutes: integer('timezone_offset_minutes').notNull().default(480),
+  updatedAt: text('updated_at').notNull(),
+});

@@ -1,11 +1,13 @@
 import type {
   ActivityDetail,
-  ActivityListItem,
+  ActivityListPage,
   ActivityPatch,
-  ImportReport,
+  ActivitySeriesResponse,
+  AthleteSettings,
+  AthleteSettingsPatch,
 } from '@runcoach/shared';
 
-async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+export async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { message?: string } | null;
@@ -13,26 +15,32 @@ async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise
   }
   return (await response.json()) as T;
 }
-
-export async function listActivities(): Promise<ActivityListItem[]> {
-  const response = await request<{ items: ActivityListItem[] }>('/api/activities');
-  return response.items;
+export function listActivities(params: URLSearchParams): Promise<ActivityListPage> {
+  return request(`/api/activities?${params.toString()}`);
 }
-
-export function getActivity(activityId: string): Promise<ActivityDetail> {
-  return request<ActivityDetail>(`/api/activities/${activityId}`);
+export function getActivity(id: string): Promise<ActivityDetail> {
+  return request(`/api/activities/${id}`);
 }
-
-export function updateActivity(activityId: string, patch: ActivityPatch): Promise<ActivityDetail> {
-  return request<ActivityDetail>(`/api/activities/${activityId}`, {
+export function getActivitySeries(
+  id: string,
+  params: URLSearchParams,
+): Promise<ActivitySeriesResponse> {
+  return request(`/api/activities/${id}/series?${params.toString()}`);
+}
+export function updateActivity(id: string, patch: ActivityPatch): Promise<ActivityDetail> {
+  return request(`/api/activities/${id}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
   });
 }
-
-export async function importFile(file: File, type: 'csv' | 'fit'): Promise<ImportReport> {
-  const body = new FormData();
-  body.append('file', file);
-  return request<ImportReport>(`/api/imports/${type}`, { method: 'POST', body });
+export function getAthleteSettings(): Promise<AthleteSettings> {
+  return request('/api/settings/athlete');
+}
+export function updateAthleteSettings(patch: AthleteSettingsPatch): Promise<AthleteSettings> {
+  return request('/api/settings/athlete', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
 }

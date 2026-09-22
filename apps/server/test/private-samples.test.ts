@@ -66,7 +66,12 @@ describe.skipIf(!available)('private real samples', () => {
     expect(repository.listActivities()).toHaveLength(65);
     const upgraded = repository.getActivity(matchingActivityId);
     expect(upgraded?.sourceTypes).toEqual(['CSV', 'FIT']);
-    expect(upgraded?.samples).toHaveLength(3055);
+    expect(
+      repository.getActivitySeries(matchingActivityId, {
+        metrics: ['heartRate'],
+        maxPoints: 5000,
+      })?.points,
+    ).toHaveLength(3055);
     expect(upgraded?.laps).toHaveLength(9);
     expect(upgraded?.name).toBe('真实样本保留名称');
     expect(upgraded?.notes).toBe('真实样本保留备注');
@@ -77,7 +82,12 @@ describe.skipIf(!available)('private real samples', () => {
       mediaType: 'application/octet-stream',
     });
     expect(duplicate.items[0]?.outcome).toBe('DUPLICATE_SKIPPED');
-    expect(repository.getActivity(matchingActivityId)?.samples).toHaveLength(3055);
+    expect(
+      repository.getActivitySeries(matchingActivityId, {
+        metrics: ['heartRate'],
+        maxPoints: 5000,
+      })?.points,
+    ).toHaveLength(3055);
 
     const unrelatedFit = fs.readFileSync(path.join(fixtures, 'exist_test.fit'));
     const created = await service.importFit({

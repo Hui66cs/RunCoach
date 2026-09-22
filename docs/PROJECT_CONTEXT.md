@@ -1,0 +1,429 @@
+# RunCoach Local 项目交接文档
+
+> 建议落盘位置：`docs/PROJECT_CONTEXT.md`  
+> 项目仓库：<https://github.com/Hui66cs/RunCoach>  
+> 本文基于交接时 `main` 分支提交 `07b9042`（`M1.1阶段完成`）的代码结构编写。  
+> 状态标记：**已实现**表示当前代码具备；**已决定、未实现**表示后续应遵守的设计；**不确定**表示必须重新查证，不能自行假设。
+
+## 1. 项目总体目标
+
+RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应用，主要运行于 Windows 11。它的长期目标是：统一接收 CSV、FIT 和未来的 ParroTao 活动摘要，在不制造重复活动的前提下形成 canonical activity；展示可靠的跑步记录、时序图表和确定性分析；随后再加入训练计划、状态跟踪和可替换的 AI 教练。
+
+产品优先级是：
+
+1. 数据正确性、可追溯性和隐私。
+2. FIT 对较粗略 CSV/未来 API 摘要的原地升级。
+3. 日常可用的活动浏览和跑步分析。
+4. 训练计划与 AI 建议。
+
+该项目不是社交平台，也不是云端多用户 SaaS。当前数据保存在用户本机。
+
+## 2. 当前 scope 与暂不实现功能
+
+### 已完成并冻结的 M1/M1.1 scope
+
+- CSV、FIT 文件导入。
+- canonical activity 与 immutable source 分离。
+- CSV 稳定身份、增量刷新和历史 source revision。
+- FIT SHA-256 幂等。
+- CSV 活动被更具体的 FIT 原地升级。
+- 自动匹配、待确认匹配、人工合并、创建新活动、跳过。
+- 导入历史、失败原因、来源、字段 provenance、合并审计。
+- 最小活动列表、活动详情、名称/备注编辑、lap 和心率/速度曲线。
+- 单元、集成、私有样本 smoke test、Playwright E2E、GitHub Actions CI。
+
+### 已批准的下一阶段 M2
+
+- 正式路由和应用布局：活动、活动详情、导入、设置。
+- 可分页、筛选、搜索的活动列表。
+- 不携带完整 samples 的活动详情接口，以及独立 series API。
+- 正式单次活动详情、分段、图表和离线轨迹轮廓。
+- 纯函数确定性分析：公里分段、前后半程、配速稳定性、心率区间、暂停/移动时间、有氧解耦的数据质量门槛。
+- 单用户运动员基础设置。
+- 大样本查询、降采样和 N+1 优化。
+
+### M2 暂时不做
+
+- 首页 dashboard、跨活动长期趋势和成就系统。
+- 每日状态/疲劳打卡。
+- 训练日历和训练计划。
+- ParroTao 在线同步的实际网络实现。
+- DeepSeek、Codex App Server 或任何 AI 教练。
+- 登录、多用户、社交、云同步。
+- 在线地图瓦片服务。
+- 备份/恢复、Windows 安装包和正式发布。
+- 医疗诊断或伤病判断。
+
+## 3. 当前完整技术栈
+
+| 层 | 技术 |
+| --- | --- |
+| Monorepo | pnpm workspace，pnpm `10.17.1` |
+| Runtime | Node.js `>=24 <25`，TypeScript `5.9`，ESM |
+| Web | React `19.1`、Vite `7.1`、TanStack Query `5.87`、Tailwind CSS `4.1` |
+| 图表 | ECharts `6.0`，core 按需注册，Canvas renderer，动态加载图表 chunk |
+| Server | Fastify `5.6`、`@fastify/cors`、`@fastify/multipart` |
+| Validation | Zod `4.1` |
+| Database | SQLite、`better-sqlite3 12.4`、Drizzle ORM `0.44`、Drizzle Kit `0.31` |
+| CSV | `csv-parse 6.1` |
+| FIT | 官方 `@garmin/fitsdk 21.208` |
+| Test | Vitest `3.2`、Playwright `1.63` |
+| CI | GitHub Actions；Node 24 + pnpm；常规 checks 与 Chromium E2E 分 job |
+
+默认开发地址：Web `127.0.0.1:5173`，API `127.0.0.1:3100`。开发数据默认位于 `.local-data`；生产目标路径是 `%LOCALAPPDATA%\RunCoach Local\data`。SQLite 开启 WAL、foreign keys、`synchronous=NORMAL`，连接超时 5 秒。
+
+## 4. 重要 repo / 代码结构
+
+```text
+RunCoach/
+├─ AGENTS.md                    # Codex 长期约束；M2 开工前必须更新里程碑
+├─ PLAN.md                      # 当前计划与验收状态
+├─ README.md
+├─ docs/
+│  ├─ ARCHITECTURE.md
+│  ├─ PRODUCT_SPEC.md
+│  ├─ IMPORT_AND_MERGE.md
+│  └─ adr/                      # FIT decoder、SQLite driver、导入身份/决议 ADR
+├─ apps/server/
+│  ├─ drizzle/                  # 0000 initial、0001 import hardening
+│  └─ src/
+│     ├─ app.ts                 # Fastify 路由和输入校验
+│     ├─ config.ts              # 本地路径、端口、时区 offset、上传上限
+│     ├─ db/{client,migrate,schema}.ts
+│     ├─ repositories/activity-repository.ts
+│     ├─ services/import-service.ts
+│     ├─ storage/raw-file-store.ts
+│     └─ errors.ts
+├─ apps/web/src/
+│  ├─ App.tsx                   # 当前单页壳；M2 需拆分和引入正式路由
+│  ├─ api.ts / imports-api.ts
+│  ├─ SeriesChart.tsx
+│  └─ components/               # Import、Pending、History、ConfirmDialog
+├─ packages/shared/src/index.ts # Zod schema、domain types、API DTO
+├─ packages/importers/src/
+│  ├─ csv-adapter.ts
+│  ├─ fit-adapter.ts
+│  ├─ matching.ts
+│  ├─ summary.ts / time.ts / types.ts
+│  └─ *.test.ts
+├─ packages/analytics/src/index.ts # 当前只有基础 downsampleSeries
+├─ e2e/                         # synthetic fixtures、upgrade、pending
+└─ .github/workflows/ci.yml
+```
+
+## 5. 核心数据模型
+
+### canonical 与 source
+
+- `activities`：对外展示的 canonical activity。保存类型、UTC 开始时间、原始时间、offset、local date、名称、备注、距离、总时长、移动时长、平均/最大心率、设备、是否有时序、主时序 source、版本号和时间戳。
+- `activity_sources`：活动的来源记录。一个 canonical activity 可有多个 source。保存 `sourceType`、external ID、稳定 identity key、content/file SHA、raw file 引用、raw/normalized summary、active 标记。
+- `raw_files`：原始文件元数据。文件按 SHA-256 content-addressed 保存于 `raw/{prefix}/{sha}.{ext}`。
+
+### 时序、圈段和可追溯性
+
+- `activity_samples`：sequence、timestamp、elapsed、distance、speed、heart rate、cadence、power、altitude、latitude、longitude；关联 activity 和 source。
+- `activity_laps`：lap sequence、开始时间、时长、距离、平均/最大心率、平均速度。
+- `activity_field_provenance`：重要 canonical 字段当前来自 USER/CSV/FIT/PARROTAO 中的哪一个 source。
+- `activity_merge_events`：合并/创建/刷新事件，保存紧凑 before/after snapshot，用于计算 changed fields。
+
+### 导入管理
+
+- `import_jobs`：一次文件导入任务，含 source type、状态、原文件名、raw file、开始/完成时间。
+- `import_items`：CSV 每行或 FIT 活动对应的处理项，含状态、outcome、activity/source、匹配分数与详情、compact normalized summary、错误、人工 resolution 和时间。
+
+重要不变量：canonical activity 与 immutable import source 分开；完整 samples/laps 只放专用表，不复制进 normalized JSON；用户编辑字段不被后续导入覆盖。
+
+## 6. 当前 API 与模块关键接口
+
+### 当前 HTTP API
+
+| 方法与路径 | 当前行为 |
+| --- | --- |
+| `GET /api/health` | 健康检查 |
+| `GET /api/activities` | 返回全部活动摘要，按开始时间倒序；尚无分页/筛选 |
+| `GET /api/activities/:activityId` | 返回活动、sources、laps、**全部 samples**、provenance、merge events |
+| `PATCH /api/activities/:activityId` | 修改名称/备注并标记 USER provenance |
+| `POST /api/imports/csv` | 单文件 multipart CSV 导入 |
+| `POST /api/imports/fit` | 单文件 multipart FIT 导入 |
+| `GET /api/imports/pending?limit&cursor` | 待确认项游标分页 |
+| `GET /api/imports/history?limit&cursor` | 导入 job 历史游标分页 |
+| `GET /api/imports/items/:itemId` | 获取 pending 详情或已完成 item 摘要 |
+| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP` |
+
+### 模块边界
+
+1. CSV/FIT adapter 只负责把不可信外部输入缩窄并转成 `NormalizedActivity[]`，不写数据库。
+2. `ImportService` 负责原始文件、adapter、幂等检查、匹配与 repository 调度。
+3. `ActivityRepository` 负责查询和事务性持久化；匹配规则不应放入 HTTP handler。
+4. `RawFileStore` 负责 content-addressed 落盘、路径约束、读取时 size/SHA 复验。
+5. `packages/shared` 是跨 server/web/package 的 schema 与 DTO 唯一来源。
+6. `packages/analytics` 只放确定性纯函数；不得依赖 UI 或 LLM。
+7. Web 通过 TanStack Query 获取和失效活动、pending、history 数据。
+
+## 7. M1/M1.1 已实现功能
+
+- pnpm monorepo、TypeScript project references、统一 format/typecheck/lint/test/build。
+- 中文 CSV adapter：BOM、严格列数、已验证中文列头、类型映射、单位转换、原始行保留。
+- 官方 Garmin FIT SDK 解码 session/lap/record/device；验证 FIT header 和 CRC。
+- 原始 CSV/FIT 文件按 SHA 保留；上传路径限制在 data root 内。
+- stable CSV identity 与 content hash 分离：文件改名、行重排或列顺序变化不会产生新 canonical activity。
+- 同一 CSV identity 内容变化时创建新的 immutable CSV source revision，旧 revision `active=false`，canonical ID 不变。
+- FIT 重复 SHA 不重复写入 samples/laps。
+- CSV 摘要匹配 FIT 后原地升级；canonical ID 保持不变。
+- 字段优先级 `USER > FIT > PARROTAO > CSV`；FIT null 不覆盖已有非空值。
+- 用户名称和备注编辑、USER provenance 和后续导入保护。
+- source、provenance、merge event 审计。
+- 待确认处理闭环和导入历史。
+- 事务回滚：合并中途失败不会留下部分 source/sample/lap/provenance/audit/canonical 修改。
+- 日志敏感 header redact，错误消息脱敏。
+- GitHub Actions checks 和 Playwright E2E。
+
+## 8. CSV / FIT / ParroTao API 导入链路
+
+### CSV：已实现
+
+1. 只接受 `.csv`。
+2. 文件先由 `RawFileStore` 保存并登记 `raw_files`，再建立 `import_job`。
+3. adapter 要求列：`活动类型`、`日期`、`标题`、`距离`、`时间`；可读取移动时间、平均/最大心率等已知列。
+4. CSV 没有内置 timezone；使用 `RUNCOACH_LOCAL_OFFSET_MINUTES`，默认 `+08:00`，同时保存 original time、UTC、offset、local date。
+5. identity key 当前为活动类型 + UTC 开始时间的稳定哈希，不依赖文件名、文件 SHA、行号和列顺序。
+6. content SHA 基于排序后的完整行键值与 trim 后内容。
+7. identity 不存在：创建 activity + CSV source。
+8. identity 已存在且 content SHA 相同：`DUPLICATE_SKIPPED`。
+9. identity 已存在但内容变化：`REFRESHED`，新建 source revision 并在允许的 provenance 范围内刷新 canonical 字段。
+10. 同一 CSV 文件内 identity 冲突：该行 `FAILED / CSV_IDENTITY_COLLISION`，不静默覆盖。
+
+### FIT：已实现
+
+1. 只接受 `.fit`，原始文件先保留。
+2. 根据 file SHA 查询现有 active FIT source；重复则 `DUPLICATE_SKIPPED`。
+3. Garmin SDK 校验并解码；当前只接受恰好一个 session。
+4. 规范化 session summary、laps、records、设备和 GPS。
+5. 与现有 canonical activities 评分匹配。
+6. 高置信唯一候选：`UPGRADED`，在事务中原地合并。
+7. 中等置信或歧义：`PENDING_CONFIRMATION`，只保存 compact summary、匹配详情和 raw FIT；不把 samples/laps 复制进 pending JSON。
+8. 无可靠候选：`CREATED` 新活动。
+9. 人工 resolve 时重新读取 raw FIT，检查路径、size、SHA，重新解码后再进入事务。
+
+### ParroTao API：已决定、未实现
+
+当前只有 `PARROTAO` source type 和优先级预留；没有 adapter、HTTP client、认证配置、同步 endpoint、增量游标或外部 API schema。不要把它描述为已完成。
+
+未来实现应遵循已确定方向：ParroTao 只作为活动摘要来源，使用稳定 external activity ID 做幂等和增量同步，规范化到相同 canonical 模型；优先级为 `FIT > PARROTAO > CSV`；之后导入更具体 FIT 时仍原地升级同一 canonical activity。ParroTao 的真实 endpoint、字段和认证方式目前**不确定，必须以实际 API 文档/响应验证，禁止猜测**。
+
+## 9. 匹配、待确认、合并与创建新活动逻辑
+
+### 当前匹配政策
+
+- 只比较相同 `activityType`。
+- 候选时间窗：30 分钟。
+- 时间差、距离差、时长差、类型、设备加权，总分 100：
+  - 时间 40；≤60 秒满分，15 分钟归零。
+  - 距离 25；≤1% 满分，≥10% 归零。
+  - 时长 20；≤1% 满分，≥10% 归零。
+  - 类型 10。
+  - 设备相同 5。
+- 距离和时长都缺失时不是候选。
+- 自动合并条件：最高分 ≥85、领先第二名 ≥15、且候选尚无 FIT source。
+- 待确认条件：最高分 ≥65，但不满足自动合并；最多保存前 5 个候选。
+- 低于 65：创建新活动。
+
+### 待确认原因
+
+- 候选已经包含不同 FIT source。
+- 多个候选分数接近。
+- 最高分处于需要用户确认的区间。
+
+### 人工动作
+
+- `ATTACH`：只能选择当时记录的候选；校验 candidate activity version，若活动已变化则返回 `STALE_CANDIDATE`，pending 保持可重试。
+- `CREATE_NEW`：用重新验证、解码后的 FIT 创建独立 canonical activity。
+- `SKIP`：不创建 domain 数据，保留导入与 resolution 审计。
+
+resolution 先把 item 从 `PENDING` 原子 claim 为 `RESOLVING`，随后在同一写事务完成 source/canonical/series/provenance/audit/item。相同动作重复请求返回幂等结果；已用不同动作解决则 `ALREADY_RESOLVED`。同一 FIT 已被别处附加时拒绝重复处理。
+
+## 10. 导入历史、失败原因与异常处理
+
+- history 以 `import_job` 展示文件、source type、开始/结束、status、各 outcome 数量和 item。
+- outcome 包括：`CREATED`、`REFRESHED`、`UPGRADED`、`DUPLICATE_SKIPPED`、`PENDING_CONFIRMATION`、`FAILED`、`SKIPPED`。
+- job 状态包括：`RUNNING`、`COMPLETED`、`COMPLETED_WITH_ERRORS`、`FAILED`；当前正常代码主要使用前 3 种。
+- pending/history 后端已有游标分页；当前前端只读取第一页，尚未提供“加载更多”。
+- resolve 非冲突异常会在 pending item 写入 `RESOLVE_FAILED` 和脱敏错误，item 保持 pending 以便重试。
+- 错误脱敏会替换 Windows 本地绝对路径、疑似 API key/authorization/cookie，并截断到 1000 字符。
+- Fastify 日志 redact authorization、cookie、`x-ptts-access-key`；不应记录完整 GPS。
+- invalid UUID、query、patch、resolution 返回 400；not found 返回 404；stale/already resolved 等冲突返回 409；未处理错误返回脱敏 500。
+
+## 11. 当前活动详情和可视化能力
+
+当前 UI 是一个单页“导入与活动验证”界面，使用内部 state 在活动、待确认、导入历史之间切换，尚无正式 URL router。
+
+已实现：
+
+- 活动列表：名称/类型、local date、距离、时长、source types、是否有时序。
+- 活动详情：名称、距离、时长、平均心率。
+- 名称和备注编辑。
+- active sources 及 FIT SHA 前缀。
+- 字段 provenance。
+- merge events 和 changed fields。
+- FIT lap 表：距离、时长、平均心率。
+- 心率/速度组合折线图。
+
+当前限制：详情 API 一次返回全部 samples；图表在浏览器端按固定间隔压到约 1000 点，可能遗漏局部极值；只有心率和速度；没有 data zoom、服务端范围查询、配速/步频/功率/海拔图、派生公里分段、正式轨迹视图或确定性训练分析。
+
+## 12. 当前测试覆盖
+
+### Importer/unit
+
+- FIT 有效文件的 session/lap/record 解码。
+- 高置信自动合并。
+- 相近候选进入 pending。
+- 低置信创建新活动。
+- 自定义 candidate window 生效。
+
+### Server integration
+
+- CSV → FIT 原地升级、canonical ID 保持、用户字段保留、重复 FIT 跳过。
+- 注入合并失败后的 source/sample/lap/canonical/audit 全事务回滚。
+- CSV 文件改名和增量 export 下 identity 稳定。
+- CSV 内容变化原地 refresh 且 USER provenance 保留。
+- 同一 CSV identity collision 明确失败。
+- pending 只存 summary JSON，并可 ATTACH。
+- SKIP 不写 domain 数据。
+- CREATE_NEW；相同动作幂等、不同动作 replay 冲突。
+- stale candidate 保持可重试。
+- legacy pending candidate 缺 activity version 时重新匹配验证。
+
+### HTTP integration
+
+- multipart CSV 导入、活动列表可见、history 可见、非法 resolution body 返回 400。
+
+### Private samples
+
+- `private-fixtures` 存在时，真实 CSV 全量导入、匹配 FIT 原地升级、不匹配 FIT 新建、真实 samples 数量检查。私有数据不提交。
+
+### Playwright
+
+1. `upgrade.spec.ts`：页面选择 CSV、导入；再选择 FIT；确认 CSV + FIT、lap、曲线；修改名称/备注；刷新后仍存在。
+2. `pending.spec.ts`：制造歧义候选；进入待确认；查看时间/距离/时长差；选择候选并确认 ATTACH；pending 数归零。
+
+当前 E2E 尚未覆盖 CREATE_NEW、SKIP、history 展开、分页、错误路径和 M2 正式路由。
+
+## 13. ECharts 与前端工程优化现状
+
+- 已使用 `echarts/core`，仅注册 `LineChart`、Grid、Legend、Tooltip、CanvasRenderer；未整包导入。
+- `SeriesChart` 通过 React `lazy` + dynamic import 分 chunk。
+- chart lifecycle 会注册/清除 resize listener 并 dispose instance。
+- 前端已有 TanStack Query query invalidation。
+- Import、Pending、History、ConfirmDialog 已从 App 拆分。
+
+仍需在 M2 处理：`App.tsx` 仍承担活动列表、详情、编辑和导航；无 router；图表数据仍由详情全量返回并在客户端做简单抽样；缺少统一格式化、页面级错误边界以及正式组件边界。
+
+## 14. 已确定且不要重新讨论的架构/产品决定
+
+1. 单用户、本地优先、默认只绑定 `127.0.0.1`；当前不做账号系统。
+2. canonical activity 与 source 分离，一个活动允许多个来源。
+3. 原始 CSV 行和 FIT 文件保留，source revision 不覆盖历史。
+4. FIT 导入必须能够原地升级已有粗略活动，不能因为 CSV 已存在就拒绝 FIT。
+5. 字段优先级固定为 `USER > FIT > PARROTAO > CSV`；null 不覆盖已有非空值。
+6. 用户修改过的名称和备注必须保留。
+7. 完整 FIT samples/laps 使用专用表和 raw FIT，不存进 source/pending JSON。
+8. 合并必须事务化并保持 canonical activity ID。
+9. 模糊匹配必须人工确认，禁止“猜一个”静默合并。
+10. CSV identity 不依赖文件名、文件 hash、行号或列顺序。
+11. 所有外部输入通过 Zod 或 adapter boundary narrowing；避免 `any`。
+12. 确定性指标放 `packages/analytics` 纯函数实现；LLM 不参与指标计算。
+13. ECharts 按需加载；不要重新改成完整 bundle。
+14. GPS 不上传、不写入完整日志；M2 如做轨迹只做离线 SVG/Canvas 轮廓，不接外部地图。
+15. 不自动 Git commit/push。
+16. 历史 migration 不修改；新增 forward-only migration。
+
+## 15. 已知 bug、限制与技术债
+
+### 已知阻塞 bug
+
+交接时没有已确认的 M1 阻塞 bug。若新环境出现失败，应先复现和记录，不要假定为既有结论。
+
+### 明确限制/技术债
+
+- `AGENTS.md`、`PLAN.md`、README/docs 仍把 scope 描述为第一阶段；M2 开工第一步必须更新，避免 Codex 被旧约束阻止。
+- `GET /api/activities` 无分页/筛选/搜索，且逐活动查询 sources，存在 N+1。
+- history 逐 job 查询 items，也存在 N+1；数据少时可用，但需关注扩展性。
+- `GET /api/activities/:id` 返回完整 samples，大 FIT 会产生大响应和前端卡顿风险。
+- 当前降采样为简单等步长抽点，不能保证保留尖峰。
+- pending/history 后端有 next cursor，前端没有加载更多。
+- `getImportItem()` 返回 `unknown`，共享响应类型不完整。
+- UI 没有正式路由；刷新不能保持内部选中视图/活动。
+- 当前 FIT 每文件只支持一个 session。
+- CSV adapter 只支持已验证的特定中文 header，不自动猜其他格式。
+- CSV 无原生 timezone，依赖配置 offset；跨时区历史数据可能需要未来显式 mapping。
+- CSV identity 是 `activityType + startTimeUtc`；同类型同一秒两条真实活动无法区分，会明确报 collision。
+- 活动类型目前只有 `RUN / STRENGTH / OTHER`。
+- 暂无删除活动、撤销误合并、备份/恢复。
+- Garmin FIT SDK 的许可证适用于当前私有/个人阶段；任何重新分发前必须重新评估，当前不支持正式 distribution。
+- `0001_import_hardening.sql` 是 forward-only；升级旧数据前应备份 data directory。
+
+## 16. M1 最终验收状态
+
+M1/M1.1 已由用户和执行 Codex 确认完成并通过验收，当前仓库提交为 `07b9042 M1.1阶段完成`。仓库 CI 配置会运行：
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm format:check
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+pnpm test:e2e
+```
+
+目标 Windows/Node 24 环境还可运行 `pnpm test:private`。本交接文档编写过程只检查了当前代码结构和接口，没有重新执行整套测试；因此如果需要记录某一次 CI run 的 URL 或精确通过时间，当前为**不确定**，应去 GitHub Actions 查证。
+
+M1 验收结论：可以进入 M2，不要再以“继续完善导入核心链路”为理由推迟正式活动与分析功能；但 M2 改动必须持续回归 M1 行为。
+
+## 17. M2 开工可直接依赖的能力
+
+- 统一的 `NormalizedActivity`、sample、lap 和 shared types。
+- 已有完整 FIT 时序、心率、步频、功率、海拔、GPS 数据列。
+- canonical activity、来源、字段 provenance、审计和 user field protection。
+- 稳定的活动 ID，可直接作为正式详情路由参数。
+- SQLite/Drizzle migration 和 repository 基础。
+- TanStack Query 客户端和 Fastify API 框架。
+- ECharts 按需动态加载基础。
+- `packages/analytics` 独立包，可扩展纯函数分析。
+- synthetic FIT/CSV fixtures、真实私有 smoke test 入口。
+- Playwright harness 与 GitHub Actions E2E job。
+- 成熟的导入页面组件，可迁移到 `/imports`，无需重写业务逻辑。
+
+M2 应优先复用这些能力，而不是更换数据库、Web 框架、FIT decoder 或重新设计导入模型。
+
+## 18. 后续开发必须遵守的原则
+
+- 开工先阅读 `AGENTS.md`、`PLAN.md` 和本文件，并先解决文档 scope 冲突。
+- 先写/调整 shared contract，再写 repository/service/API，最后接 UI。
+- source adapter、normalization、matching、merge、persistence、HTTP、React 保持分层。
+- 数据库保留完整数据；API 根据用途返回摘要或降采样结果。
+- 时序范围先在 SQL 过滤，不能读完整表后再用 JavaScript 截取。
+- 单位固定：米、秒、m/s、bpm、steps/min、watts、metres；展示层再格式化。
+- UTC、original local time、offset、stable local date 继续同时保留。
+- 派生指标不得伪装为原始 FIT 值；缺失数据不得显示成 0。
+- 所有分析必须有数据质量门槛、unavailable reason 和边界测试。
+- 新功能不得破坏 CSV→FIT 原地升级、用户字段保护、幂等和事务回滚。
+- 不提交 `.env`、数据库、raw import、private fixtures、API key 或真实 GPS。
+- 每个独立部分运行相关测试，完成前运行 format/typecheck/lint/unit/integration/E2E/build。
+- 遇到普通实现选择做保守、可测试的决定；只有迁移风险、需求冲突或 scope 扩张才暂停询问。
+- 完成报告必须说明接口、migration、算法定义、测试结果、未完成事项和风险。
+
+## 附录 A：长期上下文落盘建议
+
+本文件正文即建议写入 `docs/PROJECT_CONTEXT.md` 的长期项目上下文。落盘后：
+
+1. 在 `AGENTS.md` 增加一条：开始工作前阅读 `docs/PROJECT_CONTEXT.md`。
+2. `PLAN.md` 只维护当前里程碑任务与状态，本文件维护跨里程碑不变量和已有能力。
+3. 每个里程碑完成后更新本文件的 API、schema、已知限制和验收提交，不记录聊天过程。
+4. 若代码与本文件冲突，以已测试的代码和 migration 为准，并在同一 PR 修正文档。
+
+## 附录 B：新 Chat 初始化上下文
+
+```text
+我们继续开发 RunCoach Local：一个 Windows 11 单用户、本地优先的跑步训练 Web 应用。仓库是 https://github.com/Hui66cs/RunCoach 。M1/M1.1 已完成并验收，包括 CSV/FIT 导入、CSV→FIT 原地升级、稳定 CSV identity、待确认匹配、导入历史、事务/幂等、最小活动详情、Playwright 和 CI。请先读取仓库中的 AGENTS.md、PLAN.md、docs/PROJECT_CONTEXT.md 和现有代码；不要重做 M1。现在开始 M2：正式活动列表与详情、独立 series API、确定性分析、运动员设置和性能优化。先检查当前 main，再给出基于现有结构的执行计划并实施；暂不进入 dashboard、训练计划、ParroTao 在线同步或 AI。
+```

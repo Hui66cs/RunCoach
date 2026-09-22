@@ -6,7 +6,7 @@ RunCoach Local is a single-user, local-first running training web application fo
 
 ## Current milestone
 
-Follow `PLAN.md`. Only the first vertical slice is approved: CSV/FIT import, canonical activity merge, minimal activity UI, and tests. Do not add dashboard, training plans, ParroTao online sync, AI providers, authentication, cloud deployment, social features, or a production map.
+Follow `PLAN.md`. M1/M1.1 import and merge are complete and must remain compatible. M2 is complete and accepted (`docs/M2_ACCEPTANCE.md`): formal activity list/detail pages, deterministic single-activity analysis, athlete settings, and bounded series APIs, all of which must remain compatible. No further milestone is approved; confirm scope with the user before starting one. Do not add a dashboard, cross-activity trends, training plans/calendar, daily check-ins, ParroTao online sync, AI providers, authentication, cloud deployment, social features, online maps, installers, or medical conclusions.
 
 ## Commands
 
@@ -18,6 +18,7 @@ pnpm format:check
 pnpm typecheck
 pnpm lint
 pnpm test
+pnpm test:private
 pnpm test:e2e
 pnpm build
 pnpm dev
@@ -33,6 +34,8 @@ pnpm dev
 - Store UTC timestamps plus the original local representation, offset, and stable local date.
 - Validate external input with Zod. Avoid `any`; narrow unknown decoder output at the adapter boundary.
 - Keep deterministic analytics as pure functions. Do not use an LLM for metrics.
+- Activity detail responses must not include complete samples. Series queries filter ranges in SQL and return bounded, deterministic downsampled points.
+- Derived analytics never overwrite imported canonical fields and must report availability, reason, and data quality.
 
 ## Safety and privacy
 

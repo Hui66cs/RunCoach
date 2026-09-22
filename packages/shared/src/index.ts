@@ -219,6 +219,23 @@ export interface ActivityListItem {
   sourceTypes: SourceType[];
 }
 
+export const activityListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  cursor: z.string().min(1).optional(),
+  dateFrom: z.iso.date().optional(),
+  dateTo: z.iso.date().optional(),
+  activityType: activityTypeSchema.optional(),
+  sourceType: sourceTypeSchema.exclude(['USER']).optional(),
+  q: z.string().trim().max(200).optional(),
+});
+export type ActivityListQuery = z.infer<typeof activityListQuerySchema>;
+
+export interface ActivityListPage {
+  items: ActivityListItem[];
+  nextCursor: string | null;
+  total: number;
+}
+
 export interface ActivitySourceView {
   id: string;
   sourceType: SourceType;
@@ -242,7 +259,159 @@ export interface ActivityDetail extends ActivityListItem {
   userEditedNotes: boolean;
   sources: ActivitySourceView[];
   laps: NormalizedLap[];
-  samples: NormalizedSample[];
   provenance: Record<string, SourceType | 'USER'>;
   mergeEvents: ActivityMergeEventView[];
+  derivedSummary: DerivedActivitySummary;
+  analysis: ActivityAnalysis;
+}
+
+export const seriesMetricSchema = z.enum([
+  'heartRate',
+  'speed',
+  'pace',
+  'cadence',
+  'power',
+  'altitude',
+  'distance',
+  'gps',
+]);
+export type SeriesMetric = z.infer<typeof seriesMetricSchema>;
+
+export const activitySeriesQuerySchema = z.object({
+  metrics: z
+    .string()
+    .default('heartRate,pace')
+    .transform((value, context) => {
+      const parsed = [...new Set(value.split(',').filter(Boolean))];
+      const result = z.array(seriesMetricSchema).min(1).max(8).safeParse(parsed);
+      if (!result.success) {
+        context.addIssue({ code: 'custom', message: 'Invalid series metrics' });
+        return z.NEVER;
+      }
+      return result.data;
+    }),
+  from: z.coerce.number().finite().nonnegative().optional(),
+  to: z.coerce.number().finite().positive().optional(),
+  maxPoints: z.coerce.number().int().min(10).max(5000).default(1000),
+});
+export type ActivitySeriesQuery = z.infer<typeof activitySeriesQuerySchema>;
+
+export interface ActivitySeriesPoint {
+  sequence: number;
+  timestampUtc: string;
+  elapsedSeconds: number | null;
+  distanceMeters: number | null;
+  heartRateBpm?: number | null;
+  speedMetersPerSecond?: number | null;
+  paceSecondsPerKilometer?: number | null;
+  cadenceStepsPerMinute?: number | null;
+  powerWatts?: number | null;
+  altitudeMeters?: number | null;
+  latitudeDegrees?: number | null;
+  longitudeDegrees?: number | null;
+}
+
+export interface ActivitySeriesResponse {
+  activityId: string;
+  metrics: SeriesMetric[];
+  from: number | null;
+  to: number | null;
+  totalPoints: number;
+  returnedPoints: number;
+  points: ActivitySeriesPoint[];
+}
+
+export type AnalysisStatus = 'AVAILABLE' | 'UNAVAILABLE';
+
+export interface AnalysisResult<T> {
+  status: AnalysisStatus;
+  value: T | null;
+  reason: string | null;
+  dataQuality: Record<string, number | string | boolean | null>;
+}
+
+export interface DerivedActivitySummary {
+  averageCadenceStepsPerMinute: number | null;
+  averagePowerWatts: number | null;
+  elevationGainMeters: number | null;
+  derivedMovingDurationSeconds: number | null;
+}
+
+export interface ActivityAnalysis {
+  splits: AnalysisResult<DerivedSplit[]>;
+  halfComparison: AnalysisResult<HalfComparisonValue>;
+  paceStability: AnalysisResult<PaceStabilityValue>;
+  heartRateZones: AnalysisResult<HeartRateZoneValue[]>;
+  aerobicDecoupling: AnalysisResult<AerobicDecouplingValue>;
+  pauses: AnalysisResult<PauseAnalysisValue>;
+}
+
+export interface DerivedSplit {
+  sequence: number;
+  distanceMeters: number;
+  durationSeconds: number;
+  paceSecondsPerKilometer: number | null;
+  averageHeartRateBpm: number | null;
+  partial: boolean;
+  source: 'DERIVED_KILOMETER';
+}
+
+export interface HalfComparisonValue {
+  basis: 'DISTANCE' | 'TIME';
+  firstPaceSecondsPerKilometer: number | null;
+  secondPaceSecondsPerKilometer: number | null;
+  firstAverageHeartRateBpm: number | null;
+  secondAverageHeartRateBpm: number | null;
+  paceChangePercent: number | null;
+}
+
+export interface PaceStabilityValue {
+  averagePaceSecondsPerKilometer: number;
+  standardDeviationSeconds: number;
+  coefficientOfVariation: number;
+  conclusion: string;
+}
+
+export interface HeartRateZoneValue {
+  zone: number;
+  minimumBpm: number;
+  maximumBpm: number | null;
+  durationSeconds: number;
+}
+
+export interface AerobicDecouplingValue {
+  percent: number;
+  firstEfficiency: number;
+  secondEfficiency: number;
+  direction: 'POSITIVE_DRIFT' | 'NEGATIVE_DRIFT' | 'STABLE';
+}
+
+export interface PauseAnalysisValue {
+  movingDurationSeconds: number;
+  pausedDurationSeconds: number;
+  pauseCount: number;
+}
+
+export const athleteSettingsPatchSchema = z
+  .object({
+    maxHeartRateBpm: z.number().int().min(100).max(240).nullable().optional(),
+    restingHeartRateBpm: z.number().int().min(30).max(120).nullable().optional(),
+    thresholdHeartRateBpm: z.number().int().min(80).max(230).nullable().optional(),
+    heartRateZoneMethod: z.literal('MAX_HR_PERCENT').optional(),
+    distanceUnit: z.literal('METRIC').optional(),
+    timezoneOffsetMinutes: z.number().int().min(-840).max(840).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'At least one setting is required',
+  });
+export type AthleteSettingsPatch = z.infer<typeof athleteSettingsPatchSchema>;
+
+export interface AthleteSettings {
+  maxHeartRateBpm: number | null;
+  restingHeartRateBpm: number | null;
+  thresholdHeartRateBpm: number | null;
+  heartRateZoneMethod: 'MAX_HR_PERCENT';
+  distanceUnit: 'METRIC';
+  timezoneOffsetMinutes: number;
+  updatedAt: string;
 }

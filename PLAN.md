@@ -2,23 +2,25 @@
 
 ## Approved milestone
 
-The only approved work is the first vertical slice.
+M1/M1.1 are complete. The approved current milestone is M2: formal activity records and deterministic single-activity analysis.
 
-### Included
+### M2 included
 
-- pnpm workspace with React/Vite, Fastify, shared contracts, SQLite, Drizzle, Vitest, and a minimal UI.
-- Import the supplied Chinese `Activities.csv` format through an explicit adapter and preserve every raw row.
-- Decode FIT session, lap, and record messages with the official Garmin JavaScript FIT SDK.
-- Store original files by SHA-256, detect duplicate FIT files, match candidates, and upgrade a CSV activity in place.
-- Protect user-edited name and notes, track important field provenance, and audit merge changes.
-- Show activities, sources, laps, and heart-rate/speed series.
-- Unit and integration tests for matching, idempotency, transactional rollback, and user-edit protection.
+- Routed `/activities`, `/activities/:activityId`, `/imports`, and `/settings` application pages.
+- Cursor-paginated and filterable activities without source N+1 queries.
+- Activity detail metadata separated from bounded, range-filtered series endpoints.
+- Deterministic splits, half comparison, pace stability, heart-rate zones, aerobic decoupling, and pause analysis.
+- Local athlete settings for heart-rate analysis, metric units, and UTC offset.
+- Native FIT laps plus clearly labelled derived kilometre splits, chart zoom refinement, and offline route outline.
+- Unit, API/integration, Playwright, build, and CI coverage while preserving all M1/M1.1 behavior.
 
 ### Excluded
 
-- Dashboard, training plans, daily check-ins, trends, ParroTao online synchronization, DeepSeek, Codex App Server, authentication, cloud synchronization, backup/restore, and a production map.
+- Dashboard, cross-activity trends, training plans/calendar, daily check-ins, ParroTao online synchronization, DeepSeek, Codex App Server, any AI coach, authentication/multi-user, cloud synchronization, social features, online maps, installers, medical diagnosis, and injury advice.
 
 ## Acceptance flow
+
+M1/M1.1 import and merge acceptance:
 
 1. Import a CSV row and create one activity without time-series data.
 2. Import its matching FIT file and retain the canonical activity ID.
@@ -27,6 +29,8 @@ The only approved work is the first vertical slice.
 5. Confirm raw CSV data and FIT file remain available.
 6. Re-import the FIT and receive an idempotent duplicate result without new samples.
 7. Inject a merge failure and confirm the entire database transaction rolls back.
+
+M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTANCE.md`.
 
 ## Status
 
@@ -38,6 +42,19 @@ The only approved work is the first vertical slice.
 - [x] Automated verification, real private-sample smoke test, and handoff documentation.
 - [x] M1.1 stable CSV identity, immutable refresh revisions, and compact source summaries.
 - [x] M1.1 pending query/resolve loop, import history, UI, and Playwright/CI coverage.
+- [x] M2 shared contracts, forward migration, and deterministic analytics.
+- [x] M2 paginated activity and bounded series APIs plus athlete settings.
+- [x] M2 routed application UI, charts, splits, route outline, and data details.
+- [x] M2 final full-suite/private-fixture acceptance and handoff documentation.
+
+## M2 implementation record
+
+- `0002_activity_analysis.sql` adds the one-row athlete settings table and list/source/series indexes without altering earlier migrations.
+- Activity metadata no longer contains samples. `/series` validates requested metrics/range, filters in SQLite, and returns at most `maxPoints` extrema-preserving points.
+- Deterministic analysis lives in `packages/analytics`; imported canonical values remain unchanged and derived values are labelled.
+- The React application now routes `/activities`, `/activities/:activityId`, `/imports`, and `/settings`; the complete M1.1 import loop remains under `/imports`.
+- Final acceptance on the M2 working tree: 27 public tests, 1 private-fixture smoke test, 2 Playwright flows, and all build/format/lint/typecheck commands pass. See `docs/M2_ACCEPTANCE.md` for the recorded results, API changes, and manual acceptance steps.
+- Charts render pace on a dedicated inverted `min/km` axis so no series shows raw seconds per kilometre.
 
 ## Known constraints
 

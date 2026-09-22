@@ -2,7 +2,13 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { activityPatchSchema, resolveImportSchema } from '@runcoach/shared';
+import {
+  activityListQuerySchema,
+  activityPatchSchema,
+  activitySeriesQuerySchema,
+  athleteSettingsPatchSchema,
+  resolveImportSchema,
+} from '@runcoach/shared';
 import type { AppConfig } from './config.js';
 import type { ActivityRepository } from './repositories/activity-repository.js';
 import type { ImportService } from './services/import-service.js';
@@ -36,7 +42,12 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
 
   app.get('/api/health', () => ({ status: 'ok' }));
 
-  app.get('/api/activities', () => ({ items: dependencies.repository.listActivities() }));
+  app.get('/api/activities', async (request, reply) => {
+    const query = activityListQuerySchema.safeParse(request.query);
+    if (!query.success)
+      return reply.code(400).send({ code: 'INVALID_QUERY', message: '活动筛选参数无效' });
+    return dependencies.repository.listActivitiesPage(query.data);
+  });
 
   app.get('/api/activities/:activityId', async (request, reply) => {
     const parsed = activityParamsSchema.safeParse(request.params);
@@ -46,6 +57,23 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (activity === null)
       return reply.code(404).send({ code: 'NOT_FOUND', message: '活动不存在' });
     return activity;
+  });
+
+  app.get('/api/activities/:activityId/series', async (request, reply) => {
+    const params = activityParamsSchema.safeParse(request.params);
+    const query = activitySeriesQuerySchema.safeParse(request.query);
+    if (!params.success || !query.success)
+      return reply.code(400).send({ code: 'INVALID_SERIES_QUERY', message: '时序查询参数无效' });
+    try {
+      const series = dependencies.repository.getActivitySeries(params.data.activityId, query.data);
+      if (series === null)
+        return reply.code(404).send({ code: 'NOT_FOUND', message: '活动不存在' });
+      return series;
+    } catch (error) {
+      if (error instanceof RepositoryConflictError)
+        return reply.code(400).send({ code: error.code, message: error.message });
+      throw error;
+    }
   });
 
   app.patch('/api/activities/:activityId', async (request, reply) => {
@@ -63,6 +91,15 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
         message: error instanceof Error ? error.message : '活动不存在',
       });
     }
+  });
+
+  app.get('/api/settings/athlete', () => dependencies.repository.getAthleteSettings());
+
+  app.patch('/api/settings/athlete', async (request, reply) => {
+    const body = athleteSettingsPatchSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.code(400).send({ code: 'INVALID_ATHLETE_SETTINGS', message: '运动员设置无效' });
+    return dependencies.repository.updateAthleteSettings(body.data);
   });
 
   app.post('/api/imports/csv', async (request, reply) => {
@@ -137,7 +174,8 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof RepositoryConflictError) {
-      const status = error.code === 'NOT_FOUND' ? 404 : error.code === 'INVALID_CURSOR' ? 400 : 409;
+      const status =
+        error.code === 'NOT_FOUND' ? 404 : error.code.startsWith('INVALID_') ? 400 : 409;
       void reply.code(status).send({ code: error.code, message: sanitizeErrorMessage(error) });
       return;
     }
