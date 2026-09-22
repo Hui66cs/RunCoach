@@ -1,8 +1,8 @@
 # RunCoach Local 项目交接文档
 
-> 建议落盘位置：`docs/PROJECT_CONTEXT.md`  
-> 项目仓库：<https://github.com/Hui66cs/RunCoach>  
-> 本文基于交接时 `main` 分支提交 `07b9042`（`M1.1阶段完成`）的代码结构编写。  
+> 建议落盘位置：`docs/PROJECT_CONTEXT.md`
+> 项目仓库：<https://github.com/Hui66cs/RunCoach>（默认分支为 `master`）
+> 当前基线：`master` 分支提交 `e5e7239`（M2 完成）。本文在 M2.1 第一批（文档同步与性能基线）时更新，此前版本基于 `07b9042`（M1.1 阶段完成）编写。
 > 状态标记：**已实现**表示当前代码具备；**已决定、未实现**表示后续应遵守的设计；**不确定**表示必须重新查证，不能自行假设。
 
 ## 1. 项目总体目标
@@ -32,17 +32,25 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
 - 最小活动列表、活动详情、名称/备注编辑、lap 和心率/速度曲线。
 - 单元、集成、私有样本 smoke test、Playwright E2E、GitHub Actions CI。
 
-### 已批准的下一阶段 M2
+### 已完成并冻结的 M2 scope
 
-- 正式路由和应用布局：活动、活动详情、导入、设置。
-- 可分页、筛选、搜索的活动列表。
-- 不携带完整 samples 的活动详情接口，以及独立 series API。
-- 正式单次活动详情、分段、图表和离线轨迹轮廓。
-- 纯函数确定性分析：公里分段、前后半程、配速稳定性、心率区间、暂停/移动时间、有氧解耦的数据质量门槛。
-- 单用户运动员基础设置。
-- 大样本查询、降采样和 N+1 优化。
+- 正式路由和应用布局：`/activities`、`/activities/:activityId`、`/imports`、`/settings`。
+- 可分页、筛选、搜索、无 source N+1 的活动列表。
+- 不携带完整 samples 的活动详情接口，以及独立的有界 series API。
+- 确定性单次活动分析：公里分段、前后半程、配速稳定性、心率区间、暂停/移动时间、有氧解耦的数据质量门槛。
+- 单用户运动员设置（最大/静息/阈值心率、时区 offset、公制单位）。
+- 服务端有界降采样（保留请求指标极值，含 GPS）、图表 zoom 驱动的范围刷新、离线轨迹轮廓。
+- `0002_activity_analysis.sql` forward-only migration；单元、集成、Playwright、build、CI 覆盖。
 
-### M2 暂时不做
+### 当前里程碑 M2.1（性能与可靠性加固，进行中）
+
+- M2.1 不增加任何新产品模块。
+- 固定顺序：a) 文档同步与可重复性能基线；b) reviewer 依据基线选择真实热点；c) 分批优化；d) 回归与阶段验收。
+- 已完成 a)：`pnpm benchmark:m2` 基准工具与 `docs/M2_1_PERFORMANCE_BASELINE.md` 基线记录。
+- 当前已知性能风险（均为基线测量所得，详见基线文档）：`getActivity()` 为计算派生摘要与分析会读取该活动全部 samples，耗时随样本数近线性增长；`/series` 先在 SQL 中按范围过滤，但仍会把范围内全部行读入应用层降采样。
+- b)–d) 尚未开始；不得依据基线自行决定优化方案。
+
+### 冻结不做（跨里程碑有效）
 
 - 首页 dashboard、跨活动长期趋势和成就系统。
 - 每日状态/疲劳打卡。
@@ -76,16 +84,19 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
 
 ```text
 RunCoach/
-├─ AGENTS.md                    # Codex 长期约束；M2 开工前必须更新里程碑
+├─ AGENTS.md                    # 长期约束；当前里程碑为 M2.1
 ├─ PLAN.md                      # 当前计划与验收状态
 ├─ README.md
 ├─ docs/
 │  ├─ ARCHITECTURE.md
 │  ├─ PRODUCT_SPEC.md
 │  ├─ IMPORT_AND_MERGE.md
+│  ├─ M2_ACCEPTANCE.md          # M2 验收记录
+│  ├─ M2_1_PERFORMANCE_BASELINE.md # M2.1 性能基线（第一批产出）
+│  ├─ PROJECT_CONTEXT.md
 │  └─ adr/                      # FIT decoder、SQLite driver、导入身份/决议 ADR
 ├─ apps/server/
-│  ├─ drizzle/                  # 0000 initial、0001 import hardening
+│  ├─ drizzle/                  # 0000 initial、0001 import hardening、0002 activity analysis
 │  └─ src/
 │     ├─ app.ts                 # Fastify 路由和输入校验
 │     ├─ config.ts              # 本地路径、端口、时区 offset、上传上限
@@ -95,10 +106,12 @@ RunCoach/
 │     ├─ storage/raw-file-store.ts
 │     └─ errors.ts
 ├─ apps/web/src/
-│  ├─ App.tsx                   # 当前单页壳；M2 需拆分和引入正式路由
+│  ├─ App.tsx                   # 正式路由壳（/activities、/imports、/settings）
 │  ├─ api.ts / imports-api.ts
-│  ├─ SeriesChart.tsx
-│  └─ components/               # Import、Pending、History、ConfirmDialog
+│  ├─ SeriesChart.tsx           # ECharts 有界曲线，zoom 驱动范围刷新
+│  ├─ pages/                    # ActivitiesListPage、ActivityDetailPage、SettingsPage 等
+│  ├─ format.ts
+│  └─ components/               # Import、Pending、History、ConfirmDialog、RoutePreview
 ├─ packages/shared/src/index.ts # Zod schema、domain types、API DTO
 ├─ packages/importers/src/
 │  ├─ csv-adapter.ts
@@ -106,7 +119,10 @@ RunCoach/
 │  ├─ matching.ts
 │  ├─ summary.ts / time.ts / types.ts
 │  └─ *.test.ts
-├─ packages/analytics/src/index.ts # 当前只有基础 downsampleSeries
+├─ packages/analytics/src/index.ts # downsampleSeries（按请求指标逐字段保留极值）与确定性分析
+├─ scripts/
+│  ├─ benchmark-m2.mjs          # M2.1 性能基准（临时数据库，pnpm benchmark:m2）
+│  └─ run-e2e.mjs
 ├─ e2e/                         # synthetic fixtures、upgrade、pending
 └─ .github/workflows/ci.yml
 ```
@@ -137,18 +153,21 @@ RunCoach/
 
 ### 当前 HTTP API
 
-| 方法与路径                                | 当前行为                                                            |
-| ----------------------------------------- | ------------------------------------------------------------------- |
-| `GET /api/health`                         | 健康检查                                                            |
-| `GET /api/activities`                     | 返回全部活动摘要，按开始时间倒序；尚无分页/筛选                     |
-| `GET /api/activities/:activityId`         | 返回活动、sources、laps、**全部 samples**、provenance、merge events |
-| `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                 |
-| `POST /api/imports/csv`                   | 单文件 multipart CSV 导入                                           |
-| `POST /api/imports/fit`                   | 单文件 multipart FIT 导入                                           |
-| `GET /api/imports/pending?limit&cursor`   | 待确认项游标分页                                                    |
-| `GET /api/imports/history?limit&cursor`   | 导入 job 历史游标分页                                               |
-| `GET /api/imports/items/:itemId`          | 获取 pending 详情或已完成 item 摘要                                 |
-| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP`                                      |
+| 方法与路径                                | 当前行为                                                                                      |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET /api/health`                         | 健康检查                                                                                      |
+| `GET /api/activities`                     | 游标分页活动列表；支持 `limit/cursor/dateFrom/dateTo/activityType/sourceType/q`，无 N+1       |
+| `GET /api/activities/:activityId`         | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples** |
+| `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                                           |
+| `GET /api/activities/:activityId/series`  | 有界时序：`metrics/from/to/maxPoints`，SQL 范围过滤 + 服务端确定性降采样，不返回完整 samples  |
+| `GET /api/settings/athlete`               | 返回单行运动员设置                                                                            |
+| `PATCH /api/settings/athlete`             | 局部更新运动员设置（最大/静息/阈值心率、时区 offset 等），至少一个字段                        |
+| `POST /api/imports/csv`                   | 单文件 multipart CSV 导入                                                                     |
+| `POST /api/imports/fit`                   | 单文件 multipart FIT 导入                                                                     |
+| `GET /api/imports/pending?limit&cursor`   | 待确认项游标分页                                                                              |
+| `GET /api/imports/history?limit&cursor`   | 导入 job 历史游标分页                                                                         |
+| `GET /api/imports/items/:itemId`          | 获取 pending 详情或已完成 item 摘要                                                           |
+| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP`                                                                |
 
 ### 模块边界
 
@@ -253,22 +272,21 @@ resolution 先把 item 从 `PENDING` 原子 claim 为 `RESOLVING`，随后在同
 - Fastify 日志 redact authorization、cookie、`x-ptts-access-key`；不应记录完整 GPS。
 - invalid UUID、query、patch、resolution 返回 400；not found 返回 404；stale/already resolved 等冲突返回 409；未处理错误返回脱敏 500。
 
-## 11. 当前活动详情和可视化能力
+## 11. 当前活动详情和可视化能力（M2 后现状）
 
-当前 UI 是一个单页“导入与活动验证”界面，使用内部 state 在活动、待确认、导入历史之间切换，尚无正式 URL router。
+UI 已是正式路由应用：`/activities`（可分页筛选列表）、`/activities/:activityId`（正式详情页）、`/imports`（完整 M1.1 导入闭环）、`/settings`（运动员设置）；URL 直达和刷新均可用。
 
 已实现：
 
-- 活动列表：名称/类型、local date、距离、时长、source types、是否有时序。
-- 活动详情：名称、距离、时长、平均心率。
-- 名称和备注编辑。
-- active sources 及 FIT SHA 前缀。
-- 字段 provenance。
-- merge events 和 changed fields。
-- FIT lap 表：距离、时长、平均心率。
-- 心率/速度组合折线图。
+- 活动列表：分页、日期/类型/来源/关键词筛选，筛选状态保存在 URL query 中。
+- 活动详情：摘要卡片、字段 provenance、merge events、FIT 原生 lap 或派生公里分段。
+- 确定性分析卡片：前后半程、配速稳定性、心率区间（需设置最大心率）、有氧解耦、暂停/移动时间；不可用时显示原因，不伪造数值。
+- 名称和备注编辑，USER provenance 保护。
+- 时序图表：配速（专用倒置 min/km 轴）、心率、步频、功率、海拔，data zoom 驱动服务端范围刷新。
+- 离线 SVG 轨迹轮廓（RoutePreview）：仅本机绘制，不加载地图瓦片、不上传 GPS。
+- 数据来源与极值保留的服务端降采样：series 请求按请求指标逐字段保留 bucket 极值（GPS 按纬度/经度分别选点），结果 bounded。
 
-当前限制：详情 API 一次返回全部 samples；图表在浏览器端按固定间隔压到约 1000 点，可能遗漏局部极值；只有心率和速度；没有 data zoom、服务端范围查询、配速/步频/功率/海拔图、派生公里分段、正式轨迹视图或确定性训练分析。
+当前限制：detail API 为计算派生摘要和分析仍读取全部 samples；series 在 SQL 范围过滤后把范围内全部行读入应用层降采样。两者已纳入 M2.1 性能基线（`docs/M2_1_PERFORMANCE_BASELINE.md`），是否优化由后续批次决定。
 
 ## 12. 当前测试覆盖
 
@@ -306,7 +324,7 @@ resolution 先把 item 从 `PENDING` 原子 claim 为 `RESOLVING`，随后在同
 1. `upgrade.spec.ts`：页面选择 CSV、导入；再选择 FIT；确认 CSV + FIT、lap、曲线；修改名称/备注；刷新后仍存在。
 2. `pending.spec.ts`：制造歧义候选；进入待确认；查看时间/距离/时长差；选择候选并确认 ATTACH；pending 数归零。
 
-当前 E2E 尚未覆盖 CREATE_NEW、SKIP、history 展开、分页、错误路径和 M2 正式路由。
+当前 E2E 已覆盖 M2 正式路由（列表/筛选/详情直达、名称备注编辑、图表切换、设置驱动的心率区间）与导入闭环；尚未覆盖 CREATE_NEW、SKIP、history 展开、分页和错误路径。
 
 ## 13. ECharts 与前端工程优化现状
 
@@ -316,7 +334,7 @@ resolution 先把 item 从 `PENDING` 原子 claim 为 `RESOLVING`，随后在同
 - 前端已有 TanStack Query query invalidation。
 - Import、Pending、History、ConfirmDialog 已从 App 拆分。
 
-仍需在 M2 处理：`App.tsx` 仍承担活动列表、详情、编辑和导航；无 router；图表数据仍由详情全量返回并在客户端做简单抽样；缺少统一格式化、页面级错误边界以及正式组件边界。
+M2 已完成：正式 router、页面级组件拆分（pages/）、统一格式化工具（format.ts）、服务端有界降采样取代客户端抽样。页面级错误边界仍不是正式能力。
 
 ## 14. 已确定且不要重新讨论的架构/产品决定
 
@@ -343,28 +361,25 @@ resolution 先把 item 从 `PENDING` 原子 claim 为 `RESOLVING`，随后在同
 
 交接时没有已确认的 M1 阻塞 bug。若新环境出现失败，应先复现和记录，不要假定为既有结论。
 
-### 明确限制/技术债
+### 明确限制/技术债（M2.1 开工时更新）
 
-- `AGENTS.md`、`PLAN.md`、README/docs 仍把 scope 描述为第一阶段；M2 开工第一步必须更新，避免 Codex 被旧约束阻止。
-- `GET /api/activities` 无分页/筛选/搜索，且逐活动查询 sources，存在 N+1。
-- history 逐 job 查询 items，也存在 N+1；数据少时可用，但需关注扩展性。
-- `GET /api/activities/:id` 返回完整 samples，大 FIT 会产生大响应和前端卡顿风险。
-- 当前降采样为简单等步长抽点，不能保证保留尖峰。
+- M2.1 第一批已建立性能基线：detail 路径每次请求读取全部 samples 并在 JS 中计算派生摘要与分析，`/series` 在 SQL 范围过滤后把范围内全部行读入应用层降采样；两者耗时随样本数近线性增长（10k vs 50k 的测量数据见 `docs/M2_1_PERFORMANCE_BASELINE.md`）。是否引入缓存、预计算或新 migration 属于 M2.1 后续批次，由 reviewer 依据基线决定，本文不预设结论。
+- history 逐 job 查询 items，存在 N+1；数据少时可用，但需关注扩展性。
 - pending/history 后端有 next cursor，前端没有加载更多。
 - `getImportItem()` 返回 `unknown`，共享响应类型不完整。
-- UI 没有正式路由；刷新不能保持内部选中视图/活动。
 - 当前 FIT 每文件只支持一个 session。
 - CSV adapter 只支持已验证的特定中文 header，不自动猜其他格式。
 - CSV 无原生 timezone，依赖配置 offset；跨时区历史数据可能需要未来显式 mapping。
 - CSV identity 是 `activityType + startTimeUtc`；同类型同一秒两条真实活动无法区分，会明确报 collision。
 - 活动类型目前只有 `RUN / STRENGTH / OTHER`。
 - 暂无删除活动、撤销误合并、备份/恢复。
+- 页面级错误边界仍不是正式能力。
 - Garmin FIT SDK 的许可证适用于当前私有/个人阶段；任何重新分发前必须重新评估，当前不支持正式 distribution。
-- `0001_import_hardening.sql` 是 forward-only；升级旧数据前应备份 data directory。
+- `0001_import_hardening.sql`、`0002_activity_analysis.sql` 均为 forward-only；升级旧数据前应备份 data directory。
 
 ## 16. M1 最终验收状态
 
-M1/M1.1 已由用户和执行 Codex 确认完成并通过验收，当前仓库提交为 `07b9042 M1.1阶段完成`。仓库 CI 配置会运行：
+M1/M1.1 已由用户和执行 Codex 确认完成并通过验收（历史提交 `07b9042`）。M2 已于 `e5e7239` 完成验收，记录见 `docs/M2_ACCEPTANCE.md`。仓库 CI 配置会运行：
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -425,5 +440,5 @@ M2 应优先复用这些能力，而不是更换数据库、Web 框架、FIT dec
 ## 附录 B：新 Chat 初始化上下文
 
 ```text
-我们继续开发 RunCoach Local：一个 Windows 11 单用户、本地优先的跑步训练 Web 应用。仓库是 https://github.com/Hui66cs/RunCoach 。M1/M1.1 已完成并验收，包括 CSV/FIT 导入、CSV→FIT 原地升级、稳定 CSV identity、待确认匹配、导入历史、事务/幂等、最小活动详情、Playwright 和 CI。请先读取仓库中的 AGENTS.md、PLAN.md、docs/PROJECT_CONTEXT.md 和现有代码；不要重做 M1。现在开始 M2：正式活动列表与详情、独立 series API、确定性分析、运动员设置和性能优化。先检查当前 main，再给出基于现有结构的执行计划并实施；暂不进入 dashboard、训练计划、ParroTao 在线同步或 AI。
+我们继续开发 RunCoach Local：一个 Windows 11 单用户、本地优先的跑步训练 Web 应用。仓库是 https://github.com/Hui66cs/RunCoach （默认分支 master）。M1/M1.1/M2 已完成并验收冻结，包括 CSV/FIT 导入、CSV→FIT 原地升级、稳定 CSV identity、待确认匹配、导入历史、事务/幂等、正式活动列表/详情/series/设置路由页、确定性分析与有界降采样。当前里程碑是 M2.1（性能与可靠性加固）：第一批（文档同步与 pnpm benchmark:m2 性能基线）已完成，下一步由 reviewer 依据 docs/M2_1_PERFORMANCE_BASELINE.md 选择热点后再分批优化。请先读取仓库中的 AGENTS.md、PLAN.md、docs/PROJECT_CONTEXT.md 和现有代码；不要重做已完成里程碑，不要在热点选定前决定优化方案；不进入 dashboard、训练计划、ParroTao 在线同步或 AI。
 ```

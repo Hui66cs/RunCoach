@@ -2,7 +2,16 @@
 
 ## Approved milestone
 
-M1/M1.1 are complete. The approved current milestone is M2: formal activity records and deterministic single-activity analysis.
+M1/M1.1 and M2 are complete and frozen. The approved current milestone is M2.1: performance and reliability hardening. M2.1 adds no new product modules.
+
+### M2.1 order and scope
+
+1. [x] Documentation sync and a repeatable M2 performance baseline (`pnpm benchmark:m2`, baseline recorded in `docs/M2_1_PERFORMANCE_BASELINE.md`).
+2. [ ] Reviewer selects the real hotspots based on the recorded baseline.
+3. [ ] Batched optimizations of the selected hotspots.
+4. [ ] Regression runs and M2.1 acceptance.
+
+Optimization approaches are not decided in advance; step 2 gates step 3.
 
 ### M2 included
 
@@ -46,6 +55,7 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M2 paginated activity and bounded series APIs plus athlete settings.
 - [x] M2 routed application UI, charts, splits, route outline, and data details.
 - [x] M2 final full-suite/private-fixture acceptance and handoff documentation.
+- [x] M2.1 documentation sync and repeatable M2 performance baseline.
 
 ## M2 implementation record
 

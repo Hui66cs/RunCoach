@@ -18,6 +18,7 @@
     "test:private": "pnpm build:packages && vitest run apps/server/test/private-samples.test.ts",
     "dev:e2e": "pnpm -r --parallel --filter @runcoach/server --filter @runcoach/web dev",
     "test:e2e": "pnpm build:packages && node scripts/run-e2e.mjs",
+    "benchmark:m2": "pnpm build:packages && pnpm --filter @runcoach/server build && node scripts/benchmark-m2.mjs",
     "typecheck": "tsc -b --pretty false"
   },
   "devDependencies": {
