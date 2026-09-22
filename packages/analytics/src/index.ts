@@ -7,6 +7,7 @@ import type {
   NormalizedSample,
   PaceStabilityValue,
   PauseAnalysisValue,
+  SeriesMetric,
 } from '@runcoach/shared';
 
 export const ANALYSIS_THRESHOLDS = {
@@ -336,48 +337,92 @@ export function analyzePauses(samples: NormalizedSample[]): AnalysisResult<Pause
   );
 }
 
+type DownsampleField = Extract<
+  keyof NormalizedSample,
+  | 'heartRateBpm'
+  | 'speedMetersPerSecond'
+  | 'cadenceStepsPerMinute'
+  | 'powerWatts'
+  | 'altitudeMeters'
+  | 'distanceMeters'
+>;
+
+const downsampleAllFields: DownsampleField[] = [
+  'heartRateBpm',
+  'speedMetersPerSecond',
+  'cadenceStepsPerMinute',
+  'powerWatts',
+  'altitudeMeters',
+  'distanceMeters',
+];
+
+const downsampleMetricFields: Record<SeriesMetric, DownsampleField | null> = {
+  heartRate: 'heartRateBpm',
+  speed: 'speedMetersPerSecond',
+  pace: 'speedMetersPerSecond',
+  cadence: 'cadenceStepsPerMinute',
+  power: 'powerWatts',
+  altitude: 'altitudeMeters',
+  distance: 'distanceMeters',
+  gps: null,
+};
+
+function resolveDownsampleFields(metrics: readonly SeriesMetric[] | undefined): DownsampleField[] {
+  if (metrics === undefined) return [...downsampleAllFields];
+  const fields = new Set<DownsampleField>();
+  for (const metric of metrics) {
+    const field = downsampleMetricFields[metric];
+    if (field !== null) fields.add(field);
+  }
+  return fields.size > 0 ? [...fields] : [...downsampleAllFields];
+}
+
+/**
+ * Deterministic, bounded, extrema-preserving downsampling.
+ *
+ * Endpoints are always retained. The interior is split into buckets and, for
+ * every requested numeric metric field independently, the bucket minimum and
+ * maximum samples are retained. Fields are never compared against each other,
+ * so a high-magnitude field such as cumulative distance cannot suppress a
+ * heart-rate, power, or speed spike in another requested metric. Each field
+ * gets an equal share of the `maxPoints` budget, so the result stays within
+ * `maxPoints` without a trimming pass in normal cases. Ties keep the earliest
+ * index, keeping the output deterministic.
+ */
 export function downsampleSeries(
   samples: NormalizedSample[],
   maxPoints = 1000,
+  metrics?: readonly SeriesMetric[],
 ): NormalizedSample[] {
   if (samples.length <= maxPoints) return [...samples];
   if (maxPoints <= 2) return [samples[0]!, samples.at(-1)!].slice(0, maxPoints);
-  const fields: Array<keyof NormalizedSample> = [
-    'heartRateBpm',
-    'speedMetersPerSecond',
-    'cadenceStepsPerMinute',
-    'powerWatts',
-    'altitudeMeters',
-    'distanceMeters',
-  ];
+  const fields = resolveDownsampleFields(metrics);
+  const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / (2 * fields.length)));
   const selected = new Set<number>([0, samples.length - 1]);
-  const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / 2));
   const bucketSize = (samples.length - 2) / bucketCount;
   for (let bucket = 0; bucket < bucketCount; bucket += 1) {
     const start = 1 + Math.floor(bucket * bucketSize);
     const end = Math.min(samples.length - 1, 1 + Math.floor((bucket + 1) * bucketSize));
-    let minIndex = start;
-    let maxIndex = start;
-    let minValue = Infinity;
-    let maxValue = -Infinity;
-    for (let index = start; index < end; index += 1) {
-      const sample = samples[index]!;
-      const values = fields
-        .map((field) => sample[field])
-        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-      const low = values.length > 0 ? Math.min(...values) : 0;
-      const high = values.length > 0 ? Math.max(...values) : 0;
-      if (low < minValue) {
-        minValue = low;
-        minIndex = index;
+    for (const field of fields) {
+      let minIndex = -1;
+      let maxIndex = -1;
+      let minValue = Infinity;
+      let maxValue = -Infinity;
+      for (let index = start; index < end; index += 1) {
+        const value = samples[index]![field];
+        if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+        if (value < minValue) {
+          minValue = value;
+          minIndex = index;
+        }
+        if (value > maxValue) {
+          maxValue = value;
+          maxIndex = index;
+        }
       }
-      if (high > maxValue) {
-        maxValue = high;
-        maxIndex = index;
-      }
+      if (minIndex !== -1) selected.add(minIndex);
+      if (maxIndex !== -1) selected.add(maxIndex);
     }
-    selected.add(minIndex);
-    selected.add(maxIndex);
   }
   const indexes = [...selected].sort((a, b) => a - b);
   if (indexes.length <= maxPoints) return indexes.map((index) => samples[index]!);

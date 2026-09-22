@@ -1033,7 +1033,7 @@ export class ActivityRepository {
       latitudeDegrees: sample.latitudeDegrees,
       longitudeDegrees: sample.longitudeDegrees,
     }));
-    const points = downsampleSeries(normalized, query.maxPoints).map((sample) => ({
+    const points = downsampleSeries(normalized, query.maxPoints, query.metrics).map((sample) => ({
       sequence: sample.sequence,
       timestampUtc: sample.timestampUtc,
       elapsedSeconds: sample.elapsedSeconds ?? null,

@@ -70,8 +70,65 @@ describe('activity analytics', () => {
   it('preserves endpoints and a local spike while respecting maxPoints', () => {
     const input = samples(200);
     input[100] = { ...input[100]!, heartRateBpm: 220 };
-    const result = downsampleSeries(input, 30);
+    const result = downsampleSeries(input, 30, ['heartRate']);
     expect(result).toHaveLength(30);
+    expect(result[0]?.sequence).toBe(0);
+    expect(result.at(-1)?.sequence).toBe(199);
+    expect(result.some((sample) => sample.heartRateBpm === 220)).toBe(true);
+  });
+
+  it('keeps a heart-rate spike placed inside a bucket, away from bucket boundaries', () => {
+    const input = samples(200);
+    for (const sample of input) sample.powerWatts = 3000;
+    input[101] = { ...input[101]!, heartRateBpm: 220 };
+    const result = downsampleSeries(input, 30, ['heartRate']);
+    expect(result.length).toBeLessThanOrEqual(30);
+    expect(result.some((sample) => sample.heartRateBpm === 220)).toBe(true);
+    expect(result[0]?.sequence).toBe(0);
+    expect(result.at(-1)?.sequence).toBe(199);
+  });
+
+  it('keeps a heart-rate valley placed inside a bucket', () => {
+    const input = samples(200);
+    input[101] = { ...input[101]!, heartRateBpm: 60 };
+    const result = downsampleSeries(input, 30, ['heartRate']);
+    expect(result.length).toBeLessThanOrEqual(30);
+    expect(result.some((sample) => sample.heartRateBpm === 60)).toBe(true);
+  });
+
+  it('keeps isolated power spikes and speed valleys for their own requested metrics', () => {
+    const input = samples(200);
+    input[50] = { ...input[50]!, powerWatts: 900 };
+    input[65] = { ...input[65]!, speedMetersPerSecond: 0.4 };
+    const power = downsampleSeries(input, 30, ['power']);
+    expect(power.length).toBeLessThanOrEqual(30);
+    expect(power.some((sample) => sample.powerWatts === 900)).toBe(true);
+    const speed = downsampleSeries(input, 30, ['speed']);
+    expect(speed.length).toBeLessThanOrEqual(30);
+    expect(speed.some((sample) => sample.speedMetersPerSecond === 0.4)).toBe(true);
+  });
+
+  it('is deterministic, ordered, and bounded across repeated calls', () => {
+    const input = samples(500);
+    input[137] = { ...input[137]!, heartRateBpm: 210 };
+    input[251] = { ...input[251]!, powerWatts: 800 };
+    const first = downsampleSeries(input, 40, ['heartRate', 'power']);
+    const second = downsampleSeries(input, 40, ['heartRate', 'power']);
+    expect(first).toEqual(second);
+    expect(first.length).toBeLessThanOrEqual(40);
+    expect(first[0]?.sequence).toBe(0);
+    expect(first.at(-1)?.sequence).toBe(499);
+    const sequences = first.map((sample) => sample.sequence);
+    expect([...sequences].sort((a, b) => a - b)).toEqual(sequences);
+    expect(first.some((sample) => sample.heartRateBpm === 210)).toBe(true);
+    expect(first.some((sample) => sample.powerWatts === 800)).toBe(true);
+  });
+
+  it('keeps the default no-metrics path bounded with endpoints and per-field extrema', () => {
+    const input = samples(200);
+    input[101] = { ...input[101]!, heartRateBpm: 220 };
+    const result = downsampleSeries(input, 30);
+    expect(result.length).toBeLessThanOrEqual(30);
     expect(result[0]?.sequence).toBe(0);
     expect(result.at(-1)?.sequence).toBe(199);
     expect(result.some((sample) => sample.heartRateBpm === 220)).toBe(true);

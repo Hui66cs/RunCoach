@@ -286,6 +286,107 @@ describe('import HTTP API', () => {
     ).toBe(404);
   });
 
+  it('preserves requested-metric extrema in downsampled series regardless of other field magnitudes', async () => {
+    const stored = fileStore.save(
+      Buffer.from('extrema synthetic fit'),
+      'extrema.fit',
+      'application/octet-stream',
+    );
+    const rawFileId = repository.ensureRawFile(stored);
+    const jobId = repository.createImportJob('FIT', 'extrema.fit', rawFileId);
+    const itemId = repository.createImportItem(jobId);
+    const normalized: NormalizedActivity = {
+      sourceType: 'FIT',
+      sourceExternalId: null,
+      activityType: 'RUN',
+      startTimeUtc: '2026-09-21T00:00:00.000Z',
+      originalStartTime: '2026-09-21T08:00:00+08:00',
+      timezoneOffsetMinutes: 480,
+      localDate: '2026-09-21',
+      name: 'Extrema series',
+      notes: null,
+      distanceMeters: 50000,
+      durationSeconds: 1000,
+      movingDurationSeconds: 990,
+      averageHeartRateBpm: 150,
+      maxHeartRateBpm: 195,
+      deviceName: 'Synthetic',
+      laps: [],
+      rawSummary: {},
+      samples: Array.from({ length: 1000 }, (_, sequence) => ({
+        sequence,
+        timestampUtc: new Date(Date.UTC(2026, 8, 21, 0, 0, sequence)).toISOString(),
+        elapsedSeconds: sequence,
+        distanceMeters: sequence * 50,
+        speedMetersPerSecond: 3,
+        heartRateBpm: sequence === 511 ? 195 : 150,
+        cadenceStepsPerMinute: 170,
+        powerWatts: sequence === 700 ? 450 : 220,
+        altitudeMeters: 50,
+      })),
+    };
+    const created = repository.createActivityFromSource({
+      normalized,
+      rawFileId,
+      fileSha256: stored.sha256,
+      rawPayload: {},
+      importItemId: itemId,
+    });
+
+    const heartRateSeries = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${created.activityId}/series?metrics=heartRate&maxPoints=50`,
+    });
+    expect(heartRateSeries.statusCode).toBe(200);
+    const heartRateBody = heartRateSeries.json<{
+      points: Array<{
+        elapsedSeconds: number | null;
+        heartRateBpm?: number | null;
+        powerWatts?: number | null;
+      }>;
+      totalPoints: number;
+      returnedPoints: number;
+    }>();
+    expect(heartRateBody.totalPoints).toBe(1000);
+    expect(heartRateBody.returnedPoints).toBeLessThanOrEqual(50);
+    expect(heartRateBody.points.some((point) => point.heartRateBpm === 195)).toBe(true);
+    expect(heartRateBody.points[0]).not.toHaveProperty('powerWatts');
+
+    const powerSeries = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${created.activityId}/series?metrics=power&maxPoints=50`,
+    });
+    expect(powerSeries.statusCode).toBe(200);
+    const powerBody = powerSeries.json<{
+      points: Array<{ powerWatts?: number | null }>;
+      totalPoints: number;
+      returnedPoints: number;
+    }>();
+    expect(powerBody.returnedPoints).toBeLessThanOrEqual(50);
+    expect(powerBody.points.some((point) => point.powerWatts === 450)).toBe(true);
+
+    const ranged = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${created.activityId}/series?metrics=heartRate&from=100&to=200&maxPoints=50`,
+    });
+    expect(ranged.statusCode).toBe(200);
+    const rangedBody = ranged.json<{
+      points: Array<{ elapsedSeconds: number | null; heartRateBpm?: number | null }>;
+      totalPoints: number;
+      returnedPoints: number;
+    }>();
+    expect(rangedBody.totalPoints).toBe(101);
+    expect(rangedBody.returnedPoints).toBeLessThanOrEqual(50);
+    expect(
+      rangedBody.points.every(
+        (point) =>
+          point.elapsedSeconds !== null &&
+          point.elapsedSeconds >= 100 &&
+          point.elapsedSeconds <= 200,
+      ),
+    ).toBe(true);
+  });
+
   it('reads, validates, and partially updates athlete settings', async () => {
     const initial = await app.inject({ method: 'GET', url: '/api/settings/athlete' });
     expect(initial.statusCode).toBe(200);

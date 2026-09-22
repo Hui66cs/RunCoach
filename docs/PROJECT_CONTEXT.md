@@ -56,19 +56,19 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
 
 ## 3. 当前完整技术栈
 
-| 层 | 技术 |
-| --- | --- |
-| Monorepo | pnpm workspace，pnpm `10.17.1` |
-| Runtime | Node.js `>=24 <25`，TypeScript `5.9`，ESM |
-| Web | React `19.1`、Vite `7.1`、TanStack Query `5.87`、Tailwind CSS `4.1` |
-| 图表 | ECharts `6.0`，core 按需注册，Canvas renderer，动态加载图表 chunk |
-| Server | Fastify `5.6`、`@fastify/cors`、`@fastify/multipart` |
-| Validation | Zod `4.1` |
-| Database | SQLite、`better-sqlite3 12.4`、Drizzle ORM `0.44`、Drizzle Kit `0.31` |
-| CSV | `csv-parse 6.1` |
-| FIT | 官方 `@garmin/fitsdk 21.208` |
-| Test | Vitest `3.2`、Playwright `1.63` |
-| CI | GitHub Actions；Node 24 + pnpm；常规 checks 与 Chromium E2E 分 job |
+| 层         | 技术                                                                  |
+| ---------- | --------------------------------------------------------------------- |
+| Monorepo   | pnpm workspace，pnpm `10.17.1`                                        |
+| Runtime    | Node.js `>=24 <25`，TypeScript `5.9`，ESM                             |
+| Web        | React `19.1`、Vite `7.1`、TanStack Query `5.87`、Tailwind CSS `4.1`   |
+| 图表       | ECharts `6.0`，core 按需注册，Canvas renderer，动态加载图表 chunk     |
+| Server     | Fastify `5.6`、`@fastify/cors`、`@fastify/multipart`                  |
+| Validation | Zod `4.1`                                                             |
+| Database   | SQLite、`better-sqlite3 12.4`、Drizzle ORM `0.44`、Drizzle Kit `0.31` |
+| CSV        | `csv-parse 6.1`                                                       |
+| FIT        | 官方 `@garmin/fitsdk 21.208`                                          |
+| Test       | Vitest `3.2`、Playwright `1.63`                                       |
+| CI         | GitHub Actions；Node 24 + pnpm；常规 checks 与 Chromium E2E 分 job    |
 
 默认开发地址：Web `127.0.0.1:5173`，API `127.0.0.1:3100`。开发数据默认位于 `.local-data`；生产目标路径是 `%LOCALAPPDATA%\RunCoach Local\data`。SQLite 开启 WAL、foreign keys、`synchronous=NORMAL`，连接超时 5 秒。
 
@@ -137,18 +137,18 @@ RunCoach/
 
 ### 当前 HTTP API
 
-| 方法与路径 | 当前行为 |
-| --- | --- |
-| `GET /api/health` | 健康检查 |
-| `GET /api/activities` | 返回全部活动摘要，按开始时间倒序；尚无分页/筛选 |
-| `GET /api/activities/:activityId` | 返回活动、sources、laps、**全部 samples**、provenance、merge events |
-| `PATCH /api/activities/:activityId` | 修改名称/备注并标记 USER provenance |
-| `POST /api/imports/csv` | 单文件 multipart CSV 导入 |
-| `POST /api/imports/fit` | 单文件 multipart FIT 导入 |
-| `GET /api/imports/pending?limit&cursor` | 待确认项游标分页 |
-| `GET /api/imports/history?limit&cursor` | 导入 job 历史游标分页 |
-| `GET /api/imports/items/:itemId` | 获取 pending 详情或已完成 item 摘要 |
-| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP` |
+| 方法与路径                                | 当前行为                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------- |
+| `GET /api/health`                         | 健康检查                                                            |
+| `GET /api/activities`                     | 返回全部活动摘要，按开始时间倒序；尚无分页/筛选                     |
+| `GET /api/activities/:activityId`         | 返回活动、sources、laps、**全部 samples**、provenance、merge events |
+| `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                 |
+| `POST /api/imports/csv`                   | 单文件 multipart CSV 导入                                           |
+| `POST /api/imports/fit`                   | 单文件 multipart FIT 导入                                           |
+| `GET /api/imports/pending?limit&cursor`   | 待确认项游标分页                                                    |
+| `GET /api/imports/history?limit&cursor`   | 导入 job 历史游标分页                                               |
+| `GET /api/imports/items/:itemId`          | 获取 pending 详情或已完成 item 摘要                                 |
+| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP`                                      |
 
 ### 模块边界
 
