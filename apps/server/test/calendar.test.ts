@@ -115,24 +115,133 @@ describe('training calendar and planned workouts', () => {
     teardownHarness(harness);
   });
 
-  it('applies migration 0003 forward on top of existing M2/M3 data', async () => {
-    // The harness already applied 0000-0003 in order; prove that pre-existing
-    // activity data (M2) coexists with the new planned_workouts table (M4).
-    const activityId = createActivity(harness.repository, harness.fileStore, '2026-09-20');
-    const created = await createWorkout(harness.app, {
+  it('applies 0003 forward on top of a real 0002-state database and stays idempotent', () => {
+    // Build a partial migrations directory containing only 0000-0002, apply it
+    // to a fresh database, then write real M2 data into that 0002 state.
+    const migrationsDirectory = path.resolve('apps/server/drizzle');
+    const partialDirectory = path.join(harness.directory, 'migrations-0002');
+    fs.mkdirSync(partialDirectory);
+    for (const file of fs.readdirSync(migrationsDirectory).filter((name) => name < '0003')) {
+      fs.copyFileSync(path.join(migrationsDirectory, file), path.join(partialDirectory, file));
+    }
+    const database = openDatabase(path.join(harness.directory, 'forward.db'));
+    applyMigrations(database.sqlite, partialDirectory);
+    const repository = new ActivityRepository(database.db);
+    const activityId = createActivity(repository, harness.fileStore, '2026-09-20');
+
+    const tableExists = (): boolean =>
+      database.sqlite
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planned_workouts'",
+        )
+        .get() !== undefined;
+    expect(tableExists()).toBe(false);
+
+    // Applying the full migration directory on the same database must run only
+    // the pending 0003 and keep the existing activity readable.
+    applyMigrations(database.sqlite, migrationsDirectory);
+    expect(tableExists()).toBe(true);
+    const activity = repository.getActivity(activityId);
+    expect(activity).not.toBeNull();
+    expect(activity?.name).toBe('实际活动 2026-09-20');
+
+    // planned_workouts is usable after the forward migration.
+    const created = repository.createPlannedWorkout({
       scheduledLocalDate: '2026-09-21',
       workoutType: 'EASY_RUN',
-      title: '共存检查',
+      title: '前向迁移检查',
     });
-    expect(created.status).toBe(200);
-    const calendar = await harness.app.inject({
-      method: 'GET',
-      url: '/api/calendar?from=2026-09-20&to=2026-09-21',
+    expect(repository.getPlannedWorkout(created.id)?.title).toBe('前向迁移检查');
+
+    // Running the full directory again is idempotent.
+    applyMigrations(database.sqlite, migrationsDirectory);
+    expect(repository.getPlannedWorkout(created.id)).not.toBeNull();
+    expect(repository.getActivity(activityId)).not.toBeNull();
+    database.close();
+  });
+
+  it('persists planned workout updates across an app/database close and reopen', async () => {
+    const databasePath = path.join(harness.directory, 'persist.db');
+    const firstDatabase = openDatabase(databasePath);
+    applyMigrations(firstDatabase.sqlite, path.resolve('apps/server/drizzle'));
+    const firstRepository = new ActivityRepository(firstDatabase.db);
+    const app = await buildApp({
+      config: {
+        host: '127.0.0.1',
+        port: 3100,
+        dataDir: harness.directory,
+        databasePath,
+        localOffsetMinutes: DEFAULT_OFFSET,
+        maxUploadBytes: 1024 * 1024,
+      },
+      repository: firstRepository,
+      importService: new ImportService(firstRepository, harness.fileStore, DEFAULT_OFFSET),
     });
-    const body = calendar.json<{ activities: unknown[]; plannedWorkouts: unknown[] }>();
-    expect(body.activities).toHaveLength(1);
-    expect(body.plannedWorkouts).toHaveLength(1);
-    expect(activityId).toBeTruthy();
+    let workoutId: string;
+    try {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/planned-workouts',
+        payload: {
+          scheduledLocalDate: '2026-09-20',
+          workoutType: 'EASY_RUN',
+          title: '重启前标题',
+          targetDistanceMeters: 5000,
+        },
+      });
+      expect(created.statusCode).toBe(200);
+      workoutId = created.json<{ id: string }>().id;
+      const patched = await app.inject({
+        method: 'PATCH',
+        url: `/api/planned-workouts/${workoutId}`,
+        payload: { title: '重启后标题', targetDistanceMeters: 8000 },
+      });
+      expect(patched.statusCode).toBe(200);
+    } finally {
+      // Close the app first, then the database, in that order.
+      await app.close();
+      firstDatabase.close();
+    }
+
+    // Reopen the same database and rebuild the app/repository on top of it.
+    const reopenedDatabase = openDatabase(databasePath);
+    const reopenedRepository = new ActivityRepository(reopenedDatabase.db);
+    const reopenedApp = await buildApp({
+      config: {
+        host: '127.0.0.1',
+        port: 3100,
+        dataDir: harness.directory,
+        databasePath,
+        localOffsetMinutes: DEFAULT_OFFSET,
+        maxUploadBytes: 1024 * 1024,
+      },
+      repository: reopenedRepository,
+      importService: new ImportService(reopenedRepository, harness.fileStore, DEFAULT_OFFSET),
+    });
+    try {
+      const calendar = await reopenedApp.inject({
+        method: 'GET',
+        url: '/api/calendar?from=2026-09-20&to=2026-09-20',
+      });
+      expect(calendar.statusCode).toBe(200);
+      const body = calendar.json<{
+        plannedWorkouts: Array<{
+          id: string;
+          title: string;
+          targetDistanceMeters: number | null;
+          scheduledLocalDate: string;
+        }>;
+      }>();
+      expect(body.plannedWorkouts).toHaveLength(1);
+      const workout = body.plannedWorkouts[0]!;
+      expect(workout.id).toBe(workoutId);
+      expect(workout.title).toBe('重启后标题');
+      expect(workout.targetDistanceMeters).toBe(8000);
+      expect(workout.scheduledLocalDate).toBe('2026-09-20');
+    } finally {
+      await reopenedApp.close();
+      reopenedDatabase.close();
+    }
   });
 
   it('creates a planned workout and returns the persisted state', async () => {

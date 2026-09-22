@@ -6,16 +6,19 @@ M1/M1.1 and M2 are complete and frozen. M2.1 is complete: a repeatable performan
 
 The approved current milestone is M4: training calendar and local training plans.
 
+### M3 scope and batches (completed and reviewer-accepted)
+
+1. [x] Batch 1: Dashboard homepage — `/` route, `GET /api/dashboard` (bounded, SQLite-aggregated), 7/28-day summaries, 12-week Monday-start volume trend with zero-filled weeks, up to five recent activities, and full loading/error/empty states.
+2. [x] Batch 2: cross-activity trends — `/trends` with 12/26/52-week ranges, weekly volume/runs/pace/heart-rate trends.
+
+M3 statistics scope: only `activityType = RUN` counts towards volume; windows are closed intervals of local dates ending today (derived from athlete settings timezone offset); activities are attributed by existing `activities.local_date`; moving duration falls back to duration; average pace is summed duration over summed distance. Trends added duration-weighted weekly/range heart rate: `sum(averageHeartRate × effectiveDuration) / sum(effectiveDuration)` over RUN activities with positive heart rate and positive effective duration, null without valid coverage; range summaries use range totals, never averages of weekly values. Trends reuses the dashboard's daily RUN aggregation so the two pages cannot drift.
+
 ### M4 scope and batches
 
 1. [x] Batch 1: training calendar (`/calendar`), `0003_training_calendar.sql` with the `planned_workouts` table, planned-workout CRUD APIs, and the calendar projection of actual activities. **Implemented, awaiting reviewer acceptance.**
 2. [ ] Batch 2: plan completion status, plan-to-activity links, adherence rate, and weekly rollups (not started).
 
 M4 excludes AI-generated plans, watch/Garmin Connect writes, and all other items in the excluded list below.
-
-Statistics scope for Batch 1: only `activityType = RUN` counts towards volume; windows are closed intervals of local dates ending today (derived from athlete settings timezone offset); activities are attributed by existing `activities.local_date`; moving duration falls back to duration; average pace is summed duration over summed distance.
-
-Batch 2 inherits the same scope and adds duration-weighted weekly/range heart rate: `sum(averageHeartRate × effectiveDuration) / sum(effectiveDuration)` over RUN activities with positive heart rate and positive effective duration, null without valid coverage; range summaries use range totals, never averages of weekly values. Trends reuses the dashboard's daily RUN aggregation so the two pages cannot drift.
 
 ### M2 included
 

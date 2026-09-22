@@ -12,6 +12,11 @@ test('training calendar supports planned workout CRUD and shows real activities'
   await expect(page.getByRole('heading', { name: '训练日历' })).toBeVisible();
   await expect(page).toHaveURL(/\/calendar\?month=\d{4}-\d{2}$/);
 
+  // All fixed-date CRUD below targets September 2026 so the test never depends
+  // on the current system date; navigate there explicitly first.
+  await page.goto('/calendar?month=2026-09');
+  await expect(page.locator('[data-month]')).toHaveAttribute('data-month', '2026-09');
+
   // Create a planned easy run on 2026-09-20 with distance and duration goals.
   await page.getByRole('button', { name: '添加训练', exact: true }).click();
   await page.getByLabel('日期').fill('2026-09-20');

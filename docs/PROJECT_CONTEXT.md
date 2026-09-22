@@ -48,7 +48,7 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
 - 结论：当前 50k samples 的 detail/series 耗时对本地单用户应用可接受，暂不继续提前优化。
 - 已知性能风险保留供未来回归：`getActivity()` 为计算派生摘要与分析会读取该活动全部 samples，耗时随样本数近线性增长；`/series` 先在 SQL 中按范围过滤，但仍会把范围内全部行读入应用层降采样。
 
-### 当前里程碑 M3（Dashboard 与跨活动趋势，进行中）
+### 已验收完成的 M3（Dashboard 与跨活动趋势）
 
 - Batch 1 已交付：`/` Dashboard 首页 + `GET /api/dashboard` 有界聚合 API。
   - 最近 7 天 / 28 天概览：跑步次数、总距离、总移动时长、平均配速；仅统计 `activityType = RUN`。
@@ -56,19 +56,14 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
   - 最近活动：最多 5 条，链接到既有详情页。
   - 统计口径：闭区间本地日期（“今天”由 athlete settings 的 timezoneOffsetMinutes 计算）；活动归属使用既有 `activities.local_date`；移动时长优先 `movingDurationSeconds`、回退 `durationSeconds`、缺失按 0；平均配速 = 总移动时长 / 总距离 × 1000，仅在总距离与总移动时长均为正时计算，否则为 null（时长缺失按 0 处理即返回 null，不会输出 0 配速）。
   - 聚合在 SQLite 按 `local_date` 分组完成，固定三条查询（athlete settings、按日聚合、最近活动），查询数量与活动数量无关，无逐活动 sources N+1，不返回 samples。
-- Batch 2 已实现（等待 reviewer 验收）：`/trends` 跨活动趋势页 + `GET /api/trends?weeks=12|26|52`（非法值 400）。
+- Batch 2 已交付并通过验收：`/trends` 跨活动趋势页 + `GET /api/trends?weeks=12|26|52`（非法值 400）。
   - 汇总卡片：总跑步次数、总距离、总移动时长、范围平均配速、有效平均心率。
   - 图表：周跑量（柱，km）+ 每周次数（折线，右轴整数）；周平均配速（min/km，反向轴，null 断开）；周平均心率（bpm，null 断开）。
   - 心率口径：对有效平均心率 > 0 且有效移动时长 > 0 的 RUN 按 `sum(hr × effectiveDuration) / sum(effectiveDuration)` 加权；无有效覆盖返回 null。
   - 范围 summary 使用整个范围的总和计算，不允许平均每周值。
   - 聚合复用 Dashboard 的按日 RUN 聚合（同一私有 helper，含心率加权列），固定两条查询（settings + 按日聚合），与活动数量无关；`weeklyPoints` 长度恰为请求的 weeks（≤52），旧→新排序，当前周为最后一项，无活动周补零。
   - 周期选择保存在 URL query（`?weeks=26`），非法值回退 12 周；12 周默认。
-- Batch 3（其余跨活动趋势能力）尚未定义，范围需与 reviewer 确认。
 - record 级心率趋势属于未来范围，M3 的心率口径基于活动级 canonical `averageHeartRateBpm`。
-
-### 已验收完成的 M3
-
-- Dashboard 首页（`/` + `GET /api/dashboard`）与 `/trends` 12/26/52 周跨活动趋势均已通过 reviewer 验收；M3 不再增加 Batch 3。
 
 ### 当前里程碑 M4（训练日历与本地训练计划，进行中）
 
@@ -87,7 +82,6 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
 - 手表下发或 Garmin Connect 写入。
 - 成就系统。
 - 每日状态/疲劳打卡。
-- 训练日历和训练计划。
 - ParroTao 在线同步的实际网络实现。
 - DeepSeek、Codex App Server 或任何 AI 教练。
 - 登录、多用户、社交、云同步。
