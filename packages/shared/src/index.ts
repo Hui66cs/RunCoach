@@ -682,6 +682,19 @@ export interface AthleteSettings {
 /** Shared 1–5 self-report scale; null means "not filled in". */
 export const dailyStatusScaleSchema = z.number().int().min(1).max(5).nullable();
 
+/**
+ * Daily-status notes: non-empty strings are trimmed; a string that is empty
+ * after trimming is normalized to null (clearing the field) so a blank value
+ * is never stored as "". Explicit null clears; absent keeps the old value.
+ */
+export const dailyStatusNotesSchema = z
+  .string()
+  .trim()
+  .max(2000)
+  .transform((value) => (value.length === 0 ? null : value))
+  .nullable()
+  .optional();
+
 export const dailyStatusEntrySchema = z.object({
   id: z.string().uuid(),
   localDate: z.iso.date(),
@@ -710,7 +723,7 @@ export const dailyStatusUpsertSchema = z
     stressLevel: dailyStatusScaleSchema.optional(),
     motivationLevel: dailyStatusScaleSchema.optional(),
     restingHeartRateBpm: z.number().int().min(30).max(220).nullable().optional(),
-    notes: z.string().trim().max(2000).nullable().optional(),
+    notes: dailyStatusNotesSchema,
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: '至少需要提供一个每日状态字段',

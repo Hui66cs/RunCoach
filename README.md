@@ -68,7 +68,7 @@ The UI has Activity, Pending, and Import History views. Medium-confidence FIT ma
 - `/calendar`: monthly training calendar with planned workouts, completion status (待完成/已完成/已跳过/已逾期), manual plan-to-activity links, and monthly/weekly adherence.
 - `/trends`: 12/26/52-week cross-activity volume, pace, and heart-rate trends.
 - `/imports`: the complete M1.1 upload, pending-resolution, and history loop.
-- `/settings`: local athlete heart-rate, timezone, and profile settings (name, experience level, primary goal, weekly distance target) used by deterministic analysis.
+- `/settings`: local athlete heart-rate and timezone settings used by deterministic analysis. The athlete profile (name, experience level, primary goal, weekly distance target) exists as a data model and `PATCH /api/settings/athlete` API since M5 Batch 1, but its settings-page form is a later M5 batch — the page currently edits heart rates, timezone offset, and units only.
 
 Complete samples remain in SQLite. Activity detail metadata does not return them; `/series` applies SQL range filtering and bounded deterministic downsampling. The daily-status REST API exists since M5 Batch 1, but its frontend entry point is still a later milestone batch.
 

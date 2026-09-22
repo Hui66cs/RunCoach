@@ -269,6 +269,14 @@ describe('daily status CRUD API', () => {
     });
     const original = dailyStatusEntrySchema.parse(created.json);
 
+    // Pin updated_at to a known earlier instant so the refresh below can be
+    // asserted deterministically without any sleep or wall-clock comparison
+    // between two rapid calls.
+    const staleUpdatedAt = '2026-01-01T00:00:00.000Z';
+    harness.database.sqlite
+      .prepare('UPDATE daily_status_entries SET updated_at = ? WHERE local_date = ?')
+      .run(staleUpdatedAt, '2026-09-05');
+
     const updated = await putDailyStatus('2026-09-05', {
       sleepQuality: 4,
       restingHeartRateBpm: 55,
@@ -279,7 +287,7 @@ describe('daily status CRUD API', () => {
     // absent fields unchanged, newly provided fields written.
     expect(updatedEntry.id).toBe(original.id);
     expect(updatedEntry.createdAt).toBe(original.createdAt);
-    expect(updatedEntry.updatedAt >= original.updatedAt).toBe(true);
+    expect(Date.parse(updatedEntry.updatedAt)).toBeGreaterThan(Date.parse(staleUpdatedAt));
     expect(updatedEntry.sleepQuality).toBe(4);
     expect(updatedEntry.restingHeartRateBpm).toBe(55);
     expect(updatedEntry.notes).toBe('第一版');
@@ -294,6 +302,60 @@ describe('daily status CRUD API', () => {
       .prepare('SELECT count(*) AS c FROM daily_status_entries WHERE local_date = ?')
       .get('2026-09-05') as { c: number };
     expect(rows.c).toBe(1);
+  });
+
+  it('normalizes blank notes to null and keeps absent notes untouched', async () => {
+    // A blank string on create is normalized to null, never stored as "".
+    const empty = await putDailyStatus('2026-09-11', { sleepQuality: 3, notes: '' });
+    expect(empty.status).toBe(200);
+    const emptyEntry = dailyStatusEntrySchema.parse(empty.json);
+    expect(emptyEntry.notes).toBeNull();
+
+    const emptyRow = harness.database.sqlite
+      .prepare('SELECT notes FROM daily_status_entries WHERE local_date = ?')
+      .get('2026-09-11') as { notes: string | null };
+    expect(emptyRow.notes).toBeNull();
+
+    // A whitespace-only string is also normalized to null, on create…
+    const whitespace = await putDailyStatus('2026-09-12', { notes: '   ' });
+    expect(whitespace.status).toBe(200);
+    expect(dailyStatusEntrySchema.parse(whitespace.json).notes).toBeNull();
+    const whitespaceRow = harness.database.sqlite
+      .prepare('SELECT notes FROM daily_status_entries WHERE local_date = ?')
+      .get('2026-09-12') as { notes: string | null };
+    expect(whitespaceRow.notes).toBeNull();
+
+    // …and on update: blank notes clear the stored value.
+    const clearByBlank = await putDailyStatus('2026-09-11', { notes: '   ' });
+    expect(clearByBlank.status).toBe(200);
+    expect(dailyStatusEntrySchema.parse(clearByBlank.json).notes).toBeNull();
+    const clearedRow = harness.database.sqlite
+      .prepare('SELECT notes FROM daily_status_entries WHERE local_date = ?')
+      .get('2026-09-11') as { notes: string | null };
+    expect(clearedRow.notes).toBeNull();
+
+    // A non-empty string is trimmed on storage.
+    const trimmed = await putDailyStatus('2026-09-13', { notes: '  睡眠正常  ' });
+    expect(trimmed.status).toBe(200);
+    expect(dailyStatusEntrySchema.parse(trimmed.json).notes).toBe('睡眠正常');
+    const trimmedRow = harness.database.sqlite
+      .prepare('SELECT notes FROM daily_status_entries WHERE local_date = ?')
+      .get('2026-09-13') as { notes: string | null };
+    expect(trimmedRow.notes).toBe('睡眠正常');
+
+    // A PUT without any notes key keeps the stored value unchanged.
+    const untouched = await putDailyStatus('2026-09-13', { sleepQuality: 2 });
+    expect(untouched.status).toBe(200);
+    expect(dailyStatusEntrySchema.parse(untouched.json).notes).toBe('睡眠正常');
+
+    // An explicit null still clears the field.
+    const explicitNull = await putDailyStatus('2026-09-13', { notes: null });
+    expect(explicitNull.status).toBe(200);
+    expect(dailyStatusEntrySchema.parse(explicitNull.json).notes).toBeNull();
+    const nullRow = harness.database.sqlite
+      .prepare('SELECT notes FROM daily_status_entries WHERE local_date = ?')
+      .get('2026-09-13') as { notes: string | null };
+    expect(nullRow.notes).toBeNull();
   });
 
   it('deletes an entry, returns 404 for a second delete, and touches nothing else', async () => {
