@@ -13,6 +13,7 @@ export default defineConfig({
       testMatch: /dashboard\.spec\.ts/,
       use: { baseURL: 'http://127.0.0.1:5185' },
     },
+    { name: 'trends', testMatch: /trends\.spec\.ts/, use: { baseURL: 'http://127.0.0.1:5186' } },
   ],
   webServer: [
     {
@@ -33,6 +34,13 @@ export default defineConfig({
       command:
         'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-dashboard RUNCOACH_PORT=3112 VITE_API_TARGET=http://127.0.0.1:3112 VITE_WEB_PORT=5185 pnpm dev:e2e',
       url: 'http://127.0.0.1:5185/api/health',
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command:
+        'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-trends RUNCOACH_PORT=3113 VITE_API_TARGET=http://127.0.0.1:3113 VITE_WEB_PORT=5186 pnpm dev:e2e',
+      url: 'http://127.0.0.1:5186/api/health',
       reuseExistingServer: false,
       timeout: 120_000,
     },

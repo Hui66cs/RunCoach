@@ -9,6 +9,8 @@ import {
   athleteSettingsPatchSchema,
   dashboardResponseSchema,
   resolveImportSchema,
+  trendsQuerySchema,
+  trendsResponseSchema,
 } from '@runcoach/shared';
 import type { AppConfig } from './config.js';
 import type { ActivityRepository } from './repositories/activity-repository.js';
@@ -97,6 +99,13 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   app.get('/api/dashboard', () =>
     dashboardResponseSchema.parse(dependencies.repository.getDashboard()),
   );
+
+  app.get('/api/trends', async (request, reply) => {
+    const query = trendsQuerySchema.safeParse(request.query);
+    if (!query.success)
+      return reply.code(400).send({ code: 'INVALID_TRENDS_QUERY', message: '趋势查询参数无效' });
+    return trendsResponseSchema.parse(dependencies.repository.getTrends(query.data));
+  });
 
   app.get('/api/settings/athlete', () => dependencies.repository.getAthleteSettings());
 

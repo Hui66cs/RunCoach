@@ -22,6 +22,9 @@ import type {
   ResolveImportRequest,
   ResolveImportResult,
   SourceType,
+  TrendsQuery,
+  TrendsResponse,
+  TrendsWeeklyPoint,
 } from '@runcoach/shared';
 import {
   importOutcomeSchema,
@@ -1081,9 +1084,99 @@ export class ActivityRepository {
   }
 
   /**
+   * One bounded daily-aggregation query over RUN activities, shared by the
+   * dashboard and trends pages so their statistics cannot drift apart.
+   * `effectiveDuration = coalesce(movingDurationSeconds, durationSeconds)`;
+   * the heart-rate columns accumulate duration-weighted sums for activities
+   * with a positive average heart rate and positive effective duration.
+   */
+  private aggregateDailyRuns(
+    earliestLocalDate: string,
+    todayLocalDate: string,
+  ): Map<
+    string,
+    {
+      runs: number;
+      totalDistanceMeters: number;
+      totalMovingDurationSeconds: number;
+      heartRateWeighted: number;
+      heartRateDurationSeconds: number;
+    }
+  > {
+    const effectiveDuration = sql`coalesce(${activities.movingDurationSeconds}, ${activities.durationSeconds})`;
+    const hasHeartRate = sql`${activities.averageHeartRateBpm} > 0 and ${effectiveDuration} > 0`;
+    const dailyRows = this.db
+      .select({
+        localDate: activities.localDate,
+        runs: sql<number>`count(*)`,
+        totalDistanceMeters: sql<number>`coalesce(sum(${activities.distanceMeters}), 0)`,
+        totalMovingDurationSeconds: sql<number>`coalesce(sum(${effectiveDuration}), 0)`,
+        heartRateWeighted: sql<number>`coalesce(sum(case when ${hasHeartRate} then ${activities.averageHeartRateBpm} * ${effectiveDuration} else 0 end), 0)`,
+        heartRateDurationSeconds: sql<number>`coalesce(sum(case when ${hasHeartRate} then ${effectiveDuration} else 0 end), 0)`,
+      })
+      .from(activities)
+      .where(
+        and(
+          eq(activities.activityType, 'RUN'),
+          gte(activities.localDate, earliestLocalDate),
+          lte(activities.localDate, todayLocalDate),
+        ),
+      )
+      .groupBy(activities.localDate)
+      .all();
+    return new Map(
+      dailyRows.map((row) => [
+        row.localDate,
+        {
+          runs: Number(row.runs),
+          totalDistanceMeters: Number(row.totalDistanceMeters),
+          totalMovingDurationSeconds: Number(row.totalMovingDurationSeconds),
+          heartRateWeighted: Number(row.heartRateWeighted),
+          heartRateDurationSeconds: Number(row.heartRateDurationSeconds),
+        },
+      ]),
+    );
+  }
+
+  /** Sums the daily aggregates inside a closed local-date window. */
+  private aggregateWindow(
+    window: LocalDateWindow,
+    byDate: ReturnType<ActivityRepository['aggregateDailyRuns']>,
+  ): {
+    runs: number;
+    totalDistanceMeters: number;
+    totalMovingDurationSeconds: number;
+    heartRateWeighted: number;
+    heartRateDurationSeconds: number;
+  } {
+    let runs = 0;
+    let totalDistanceMeters = 0;
+    let totalMovingDurationSeconds = 0;
+    let heartRateWeighted = 0;
+    let heartRateDurationSeconds = 0;
+    for (const date of eachLocalDate(window)) {
+      const row = byDate.get(date);
+      if (row === undefined) continue;
+      runs += row.runs;
+      totalDistanceMeters += row.totalDistanceMeters;
+      totalMovingDurationSeconds += row.totalMovingDurationSeconds;
+      heartRateWeighted += row.heartRateWeighted;
+      heartRateDurationSeconds += row.heartRateDurationSeconds;
+    }
+    return {
+      runs,
+      totalDistanceMeters,
+      totalMovingDurationSeconds,
+      heartRateWeighted,
+      heartRateDurationSeconds,
+    };
+  }
+
+  /**
    * Bounded cross-activity dashboard summary. Runs are aggregated in SQLite by
-   * `local_date` over the 12-week window; two queries total, no per-activity
-   * source lookups and no samples. `todayLocalDate` defaults to the local date
+   * `local_date` over the 12-week window; a fixed number of queries (athlete
+   * settings, daily aggregation, recent activities), no per-activity source
+   * lookups and no samples. `todayLocalDate` defaults to the local date
    * derived from the athlete settings timezone offset and may be injected in
    * tests for deterministic windows.
    */
@@ -1092,51 +1185,24 @@ export class ActivityRepository {
     const today =
       todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);
     const weeks = weeklyWindows(today, 12);
-    const earliest = weeks[0]!.startLocalDate;
-    const dailyRows = this.db
-      .select({
-        localDate: activities.localDate,
-        runs: sql<number>`count(*)`,
-        totalDistanceMeters: sql<number>`coalesce(sum(${activities.distanceMeters}), 0)`,
-        totalMovingDurationSeconds: sql<number>`coalesce(sum(coalesce(${activities.movingDurationSeconds}, ${activities.durationSeconds})), 0)`,
-      })
-      .from(activities)
-      .where(
-        and(
-          eq(activities.activityType, 'RUN'),
-          gte(activities.localDate, earliest),
-          lte(activities.localDate, today),
-        ),
-      )
-      .groupBy(activities.localDate)
-      .all();
-    const byDate = new Map(dailyRows.map((row) => [row.localDate, row]));
-    const summarizeWindow = (window: LocalDateWindow): DashboardPeriodSummary => {
-      let runs = 0;
-      let totalDistanceMeters = 0;
-      let totalMovingDurationSeconds = 0;
-      for (const date of eachLocalDate(window)) {
-        const row = byDate.get(date);
-        if (row === undefined) continue;
-        runs += Number(row.runs);
-        totalDistanceMeters += Number(row.totalDistanceMeters);
-        totalMovingDurationSeconds += Number(row.totalMovingDurationSeconds);
-      }
+    const byDate = this.aggregateDailyRuns(weeks[0]!.startLocalDate, today);
+    const toPeriodSummary = (window: LocalDateWindow): DashboardPeriodSummary => {
+      const totals = this.aggregateWindow(window, byDate);
       return {
-        runs,
-        totalDistanceMeters,
-        totalMovingDurationSeconds,
+        runs: totals.runs,
+        totalDistanceMeters: totals.totalDistanceMeters,
+        totalMovingDurationSeconds: totals.totalMovingDurationSeconds,
         // A meaningful pace needs both positive distance and positive
         // effective moving duration; otherwise the schema's positive-or-null
         // contract (and the UI) must receive null instead of 0.
         averagePaceSecondsPerKilometer:
-          totalDistanceMeters > 0 && totalMovingDurationSeconds > 0
-            ? (totalMovingDurationSeconds / totalDistanceMeters) * 1000
+          totals.totalDistanceMeters > 0 && totals.totalMovingDurationSeconds > 0
+            ? (totals.totalMovingDurationSeconds / totals.totalDistanceMeters) * 1000
             : null,
       };
     };
     const weeklyVolumes: DashboardWeeklyVolume[] = weeks.map((week) => {
-      const summary = summarizeWindow(week);
+      const summary = toPeriodSummary(week);
       return {
         weekStartLocalDate: week.startLocalDate,
         weekEndLocalDate: week.endLocalDate,
@@ -1162,8 +1228,8 @@ export class ActivityRepository {
     return {
       generatedForLocalDate: today,
       timezoneOffsetMinutes: settings.timezoneOffsetMinutes,
-      last7Days: summarizeWindow(lastDaysWindow(today, 7)),
-      last28Days: summarizeWindow(lastDaysWindow(today, 28)),
+      last7Days: toPeriodSummary(lastDaysWindow(today, 7)),
+      last28Days: toPeriodSummary(lastDaysWindow(today, 28)),
       weeklyVolumes,
       recentActivities: recentRows.map((row) => ({
         id: row.id,
@@ -1175,6 +1241,64 @@ export class ActivityRepository {
         durationSeconds: row.durationSeconds,
         movingDurationSeconds: row.movingDurationSeconds,
       })),
+    };
+  }
+
+  /**
+   * Bounded cross-activity trends. Weekly windows are Monday-start and include
+   * the current week; activities with a future local date are excluded by the
+   * daily-aggregation upper bound. Pace and heart rate follow the same
+   * statistics as the dashboard: pace needs positive distance and effective
+   * duration, heart rate is duration-weighted and null without valid coverage.
+   */
+  getTrends(query: TrendsQuery, todayLocalDate?: string): TrendsResponse {
+    const settings = this.getAthleteSettings();
+    const today =
+      todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);
+    const weeks = weeklyWindows(today, query.weeks);
+    const byDate = this.aggregateDailyRuns(weeks[0]!.startLocalDate, today);
+    const toPoint = (week: LocalDateWindow): TrendsWeeklyPoint => {
+      const totals = this.aggregateWindow(week, byDate);
+      return {
+        weekStartLocalDate: week.startLocalDate,
+        weekEndLocalDate: week.endLocalDate,
+        runs: totals.runs,
+        totalDistanceMeters: totals.totalDistanceMeters,
+        totalMovingDurationSeconds: totals.totalMovingDurationSeconds,
+        averagePaceSecondsPerKilometer:
+          totals.totalDistanceMeters > 0 && totals.totalMovingDurationSeconds > 0
+            ? (totals.totalMovingDurationSeconds / totals.totalDistanceMeters) * 1000
+            : null,
+        averageHeartRateBpm:
+          totals.heartRateDurationSeconds > 0
+            ? totals.heartRateWeighted / totals.heartRateDurationSeconds
+            : null,
+      };
+    };
+    const weeklyPoints = weeks.map(toPoint);
+    const summaryWindow: LocalDateWindow = {
+      startLocalDate: weeks[0]!.startLocalDate,
+      endLocalDate: today,
+    };
+    const totals = this.aggregateWindow(summaryWindow, byDate);
+    return {
+      generatedForLocalDate: today,
+      timezoneOffsetMinutes: settings.timezoneOffsetMinutes,
+      weeks: query.weeks,
+      summary: {
+        runs: totals.runs,
+        totalDistanceMeters: totals.totalDistanceMeters,
+        totalMovingDurationSeconds: totals.totalMovingDurationSeconds,
+        averagePaceSecondsPerKilometer:
+          totals.totalDistanceMeters > 0 && totals.totalMovingDurationSeconds > 0
+            ? (totals.totalMovingDurationSeconds / totals.totalDistanceMeters) * 1000
+            : null,
+        averageHeartRateBpm:
+          totals.heartRateDurationSeconds > 0
+            ? totals.heartRateWeighted / totals.heartRateDurationSeconds
+            : null,
+      },
+      weeklyPoints,
     };
   }
 

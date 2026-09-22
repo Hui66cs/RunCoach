@@ -6,6 +6,8 @@ import type {
   AthleteSettings,
   AthleteSettingsPatch,
   DashboardResponse,
+  TrendsQuery,
+  TrendsResponse,
 } from '@runcoach/shared';
 
 export async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -37,6 +39,10 @@ export function updateActivity(id: string, patch: ActivityPatch): Promise<Activi
 }
 export function getDashboard(): Promise<DashboardResponse> {
   return request('/api/dashboard');
+}
+export function getTrends(query: TrendsQuery): Promise<TrendsResponse> {
+  const params = new URLSearchParams({ weeks: String(query.weeks) });
+  return request(`/api/trends?${params.toString()}`);
 }
 export function getAthleteSettings(): Promise<AthleteSettings> {
   return request('/api/settings/athlete');

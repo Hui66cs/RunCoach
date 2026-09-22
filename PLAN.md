@@ -9,9 +9,11 @@ The approved current milestone is M3: Dashboard and cross-activity trends.
 ### M3 scope and batches
 
 1. [x] Batch 1: Dashboard homepage — `/` route, `GET /api/dashboard` (bounded, SQLite-aggregated), 7/28-day summaries, 12-week Monday-start volume trend with zero-filled weeks, up to five recent activities, and full loading/error/empty states.
-2. [ ] Batch 2+: broader cross-activity trends (scope to be defined with the reviewer before starting).
+2. [x] Batch 2: cross-activity trends page — `/trends` route with 12/26/52-week range switch (`?weeks=` in URL), `GET /api/trends` (bounded, SQLite-aggregated), weekly volume/runs chart, weekly pace (inverted min/km axis) and duration-weighted heart-rate trends with explicit empty states. **Awaiting reviewer acceptance; the rest of M3 is not complete.**
 
 Statistics scope for Batch 1: only `activityType = RUN` counts towards volume; windows are closed intervals of local dates ending today (derived from athlete settings timezone offset); activities are attributed by existing `activities.local_date`; moving duration falls back to duration; average pace is summed duration over summed distance.
+
+Batch 2 inherits the same scope and adds duration-weighted weekly/range heart rate: `sum(averageHeartRate × effectiveDuration) / sum(effectiveDuration)` over RUN activities with positive heart rate and positive effective duration, null without valid coverage; range summaries use range totals, never averages of weekly values. Trends reuses the dashboard's daily RUN aggregation so the two pages cannot drift.
 
 ### M2 included
 

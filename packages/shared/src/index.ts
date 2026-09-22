@@ -430,6 +430,46 @@ export const dashboardResponseSchema = z.object({
 });
 export type DashboardResponse = z.infer<typeof dashboardResponseSchema>;
 
+export const trendsQuerySchema = z.object({
+  weeks: z.coerce
+    .number()
+    .int()
+    .refine((value): value is 12 | 26 | 52 => value === 12 || value === 26 || value === 52, {
+      message: 'weeks 仅允许 12、26 或 52',
+    })
+    .default(12),
+});
+export type TrendsQuery = z.infer<typeof trendsQuerySchema>;
+
+export const trendsSummarySchema = z.object({
+  runs: z.number().int().nonnegative(),
+  totalDistanceMeters: z.number().nonnegative(),
+  totalMovingDurationSeconds: z.number().nonnegative(),
+  averagePaceSecondsPerKilometer: z.number().positive().nullable(),
+  averageHeartRateBpm: z.number().positive().nullable(),
+});
+export type TrendsSummary = z.infer<typeof trendsSummarySchema>;
+
+export const trendsWeeklyPointSchema = z.object({
+  weekStartLocalDate: z.iso.date(),
+  weekEndLocalDate: z.iso.date(),
+  runs: z.number().int().nonnegative(),
+  totalDistanceMeters: z.number().nonnegative(),
+  totalMovingDurationSeconds: z.number().nonnegative(),
+  averagePaceSecondsPerKilometer: z.number().positive().nullable(),
+  averageHeartRateBpm: z.number().positive().nullable(),
+});
+export type TrendsWeeklyPoint = z.infer<typeof trendsWeeklyPointSchema>;
+
+export const trendsResponseSchema = z.object({
+  generatedForLocalDate: z.iso.date(),
+  timezoneOffsetMinutes: z.number().int().min(-840).max(840),
+  weeks: z.union([z.literal(12), z.literal(26), z.literal(52)]),
+  summary: trendsSummarySchema,
+  weeklyPoints: z.array(trendsWeeklyPointSchema).max(52),
+});
+export type TrendsResponse = z.infer<typeof trendsResponseSchema>;
+
 export const athleteSettingsPatchSchema = z
   .object({
     maxHeartRateBpm: z.number().int().min(100).max(240).nullable().optional(),

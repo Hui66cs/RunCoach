@@ -56,7 +56,14 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
   - 最近活动：最多 5 条，链接到既有详情页。
   - 统计口径：闭区间本地日期（“今天”由 athlete settings 的 timezoneOffsetMinutes 计算）；活动归属使用既有 `activities.local_date`；移动时长优先 `movingDurationSeconds`、回退 `durationSeconds`、缺失按 0；平均配速 = 总移动时长 / 总距离 × 1000，仅在总距离与总移动时长均为正时计算，否则为 null（时长缺失按 0 处理即返回 null，不会输出 0 配速）。
   - 聚合在 SQLite 按 `local_date` 分组完成，固定三条查询（athlete settings、按日聚合、最近活动），查询数量与活动数量无关，无逐活动 sources N+1，不返回 samples。
-- Batch 2+（更广泛的跨活动趋势）尚未开始，范围需与 reviewer 确认。
+- Batch 2 已实现（等待 reviewer 验收）：`/trends` 跨活动趋势页 + `GET /api/trends?weeks=12|26|52`（非法值 400）。
+  - 汇总卡片：总跑步次数、总距离、总移动时长、范围平均配速、有效平均心率。
+  - 图表：周跑量（柱，km）+ 每周次数（折线，右轴整数）；周平均配速（min/km，反向轴，null 断开）；周平均心率（bpm，null 断开）。
+  - 心率口径：对有效平均心率 > 0 且有效移动时长 > 0 的 RUN 按 `sum(hr × effectiveDuration) / sum(effectiveDuration)` 加权；无有效覆盖返回 null。
+  - 范围 summary 使用整个范围的总和计算，不允许平均每周值。
+  - 聚合复用 Dashboard 的按日 RUN 聚合（同一私有 helper，含心率加权列），固定两条查询（settings + 按日聚合），与活动数量无关；`weeklyPoints` 长度恰为请求的 weeks（≤52），旧→新排序，当前周为最后一项，无活动周补零。
+  - 周期选择保存在 URL query（`?weeks=26`），非法值回退 12 周；12 周默认。
+- Batch 3（其余跨活动趋势能力）尚未定义，范围需与 reviewer 确认。
 
 ### 冻结不做（跨里程碑有效）
 
@@ -161,22 +168,23 @@ RunCoach/
 
 ### 当前 HTTP API
 
-| 方法与路径                                | 当前行为                                                                                      |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `GET /api/health`                         | 健康检查                                                                                      |
-| `GET /api/dashboard`                      | 有界 Dashboard 聚合：7/28 天概览、12 自然周跑量、最近 5 条活动；不返回 samples，无 N+1        |
-| `GET /api/activities`                     | 游标分页活动列表；支持 `limit/cursor/dateFrom/dateTo/activityType/sourceType/q`，无 N+1       |
-| `GET /api/activities/:activityId`         | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples** |
-| `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                                           |
-| `GET /api/activities/:activityId/series`  | 有界时序：`metrics/from/to/maxPoints`，SQL 范围过滤 + 服务端确定性降采样，不返回完整 samples  |
-| `GET /api/settings/athlete`               | 返回单行运动员设置                                                                            |
-| `PATCH /api/settings/athlete`             | 局部更新运动员设置（最大/静息/阈值心率、时区 offset 等），至少一个字段                        |
-| `POST /api/imports/csv`                   | 单文件 multipart CSV 导入                                                                     |
-| `POST /api/imports/fit`                   | 单文件 multipart FIT 导入                                                                     |
-| `GET /api/imports/pending?limit&cursor`   | 待确认项游标分页                                                                              |
-| `GET /api/imports/history?limit&cursor`   | 导入 job 历史游标分页                                                                         |
-| `GET /api/imports/items/:itemId`          | 获取 pending 详情或已完成 item 摘要                                                           |
-| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP`                                                                |
+| 方法与路径                                | 当前行为                                                                                          |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `GET /api/health`                         | 健康检查                                                                                          |
+| `GET /api/dashboard`                      | 有界 Dashboard 聚合：7/28 天概览、12 自然周跑量、最近 5 条活动；不返回 samples，无 N+1            |
+| `GET /api/trends`                         | 有界跨活动趋势：`weeks=12\|26\|52`（非法 400），周跑量/次数/配速/加权心率；不返回 samples，无 N+1 |
+| `GET /api/activities`                     | 游标分页活动列表；支持 `limit/cursor/dateFrom/dateTo/activityType/sourceType/q`，无 N+1           |
+| `GET /api/activities/:activityId`         | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples**     |
+| `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                                               |
+| `GET /api/activities/:activityId/series`  | 有界时序：`metrics/from/to/maxPoints`，SQL 范围过滤 + 服务端确定性降采样，不返回完整 samples      |
+| `GET /api/settings/athlete`               | 返回单行运动员设置                                                                                |
+| `PATCH /api/settings/athlete`             | 局部更新运动员设置（最大/静息/阈值心率、时区 offset 等），至少一个字段                            |
+| `POST /api/imports/csv`                   | 单文件 multipart CSV 导入                                                                         |
+| `POST /api/imports/fit`                   | 单文件 multipart FIT 导入                                                                         |
+| `GET /api/imports/pending?limit&cursor`   | 待确认项游标分页                                                                                  |
+| `GET /api/imports/history?limit&cursor`   | 导入 job 历史游标分页                                                                             |
+| `GET /api/imports/items/:itemId`          | 获取 pending 详情或已完成 item 摘要                                                               |
+| `POST /api/imports/items/:itemId/resolve` | `ATTACH`、`CREATE_NEW`、`SKIP`                                                                    |
 
 ### 模块边界
 

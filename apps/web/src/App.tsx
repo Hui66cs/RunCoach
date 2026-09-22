@@ -4,6 +4,7 @@ import { ActivityDetailPage } from './pages/ActivityDetailPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { ImportsPage } from './pages/ImportsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
+import { TrendsPage } from './pages/TrendsPage.js';
 
 function Layout() {
   const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -18,6 +19,9 @@ function Layout() {
           <nav className="flex gap-1" aria-label="主导航">
             <NavLink to="/" className={linkClass}>
               概览
+            </NavLink>
+            <NavLink to="/trends" className={linkClass}>
+              趋势
             </NavLink>
             <NavLink to="/activities" className={linkClass}>
               活动
@@ -42,6 +46,7 @@ export function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<DashboardPage />} />
+        <Route path="trends" element={<TrendsPage />} />
         <Route path="activities" element={<ActivitiesPage />} />
         <Route path="activities/:activityId" element={<ActivityDetailPage />} />
         <Route path="imports" element={<ImportsPage />} />

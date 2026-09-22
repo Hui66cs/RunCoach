@@ -3,12 +3,19 @@ import * as echarts from 'echarts/core';
 import { BarChart, LineChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
-import type { DashboardWeeklyVolume } from '@runcoach/shared';
 import { formatDuration } from '../format.js';
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 
-export function WeeklyVolumeChart({ weeks }: { weeks: DashboardWeeklyVolume[] }) {
+/** Structural subset shared by dashboard weekly volumes and trends points. */
+export interface WeeklyVolumeDatum {
+  weekStartLocalDate: string;
+  runs: number;
+  totalDistanceMeters: number;
+  totalMovingDurationSeconds: number;
+}
+
+export function WeeklyVolumeChart({ weeks }: { weeks: readonly WeeklyVolumeDatum[] }) {
   const elementRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (elementRef.current === null) return;
