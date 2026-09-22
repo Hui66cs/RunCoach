@@ -2,7 +2,7 @@
 
 > 建议落盘位置：`docs/PROJECT_CONTEXT.md`
 > 项目仓库：<https://github.com/Hui66cs/RunCoach>（默认分支为 `master`）
-> 当前基线：`master` 分支，当前里程碑 M3（Dashboard 与跨活动趋势）。M2 与 M2.1 均已完成并冻结；此前版本分别基于 `07b9042`（M1.1）与 `e5e7239`（M2）编写。
+> 当前基线：`master` 分支，当前里程碑 M4（训练日历与本地训练计划）。M1/M1.1/M2/M2.1/M3 均已完成并冻结；此前版本基于更早里程碑编写。
 > 状态标记：**已实现**表示当前代码具备；**已决定、未实现**表示后续应遵守的设计；**不确定**表示必须重新查证，不能自行假设。
 
 ## 1. 项目总体目标
@@ -64,9 +64,27 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
   - 聚合复用 Dashboard 的按日 RUN 聚合（同一私有 helper，含心率加权列），固定两条查询（settings + 按日聚合），与活动数量无关；`weeklyPoints` 长度恰为请求的 weeks（≤52），旧→新排序，当前周为最后一项，无活动周补零。
   - 周期选择保存在 URL query（`?weeks=26`），非法值回退 12 周；12 周默认。
 - Batch 3（其余跨活动趋势能力）尚未定义，范围需与 reviewer 确认。
+- record 级心率趋势属于未来范围，M3 的心率口径基于活动级 canonical `averageHeartRateBpm`。
+
+### 已验收完成的 M3
+
+- Dashboard 首页（`/` + `GET /api/dashboard`）与 `/trends` 12/26/52 周跨活动趋势均已通过 reviewer 验收；M3 不再增加 Batch 3。
+
+### 当前里程碑 M4（训练日历与本地训练计划，进行中）
+
+- Batch 1 已实现（等待 reviewer 验收）：
+  - `0003_training_calendar.sql`（forward-only）：新增 `planned_workouts` 表（id、scheduled_local_date、workout_type、title、notes、target_distance_meters、target_duration_seconds、created_at、updated_at）与 `scheduled_local_date` 索引；不改 activities，不复制实际活动。
+  - `GET /api/calendar?from&to`：闭区间（最多 93 天），同时返回计划训练与有界实际活动摘要（无 samples/laps/sources），SQL 内过滤、固定两条查询。
+  - `POST /api/planned-workouts`、`PATCH /api/planned-workouts/:id`（至少一个字段，更新 updatedAt）、`DELETE /api/planned-workouts/:id`（204；只删 planned workout，不影响活动或导入数据）。
+  - 训练类型：EASY_RUN、LONG_RUN、TEMPO_RUN、INTERVAL_RUN、RECOVERY_RUN、RACE、STRENGTH、REST、OTHER；REST/STRENGTH/OTHER 允许无目标，跑步类型本批也不强制目标。
+  - 单位语义：API 存储米、秒；前端输入 km 与小时/分钟，提交前换算；标题 trim 后 1–120 字符；notes ≤2000；目标必须是有限正数或空。
+  - `/calendar` 月视图：周一为每周第一天，含相邻月补齐（35 或 42 天网格），月份保存在 URL（`?month=YYYY-MM`），非法回退当前月；窄屏为 agenda 列表；计划（绿）与实际活动（蓝）视觉区分，实际活动只读并链接到详情。
+- Batch 2 尚未开始：计划完成状态、计划与实际活动关联、执行率与周汇总。
 
 ### 冻结不做（跨里程碑有效）
 
+- AI 自动生成训练计划、DeepSeek/OpenAI 或其他模型接入。
+- 手表下发或 Garmin Connect 写入。
 - 成就系统。
 - 每日状态/疲劳打卡。
 - 训练日历和训练计划。
@@ -124,9 +142,9 @@ RunCoach/
 │  ├─ App.tsx                   # 正式路由壳（/、/activities、/imports、/settings）
 │  ├─ api.ts / imports-api.ts
 │  ├─ SeriesChart.tsx           # ECharts 有界曲线，zoom 驱动范围刷新
-│  ├─ pages/                    # DashboardPage、ActivitiesListPage、ActivityDetailPage、SettingsPage 等
+│  ├─ pages/                    # DashboardPage、TrendsPage、CalendarPage、ActivitiesPage、SettingsPage 等
 │  ├─ format.ts
-│  └─ components/               # WeeklyVolumeChart、Import、Pending、History、ConfirmDialog、RoutePreview
+│  └─ components/               # PlannedWorkoutDialog、WeeklyVolumeChart、Import、Pending、History、ConfirmDialog、RoutePreview
 ├─ packages/shared/src/index.ts # Zod schema、domain types、API DTO
 ├─ packages/importers/src/
 │  ├─ csv-adapter.ts
@@ -173,6 +191,10 @@ RunCoach/
 | `GET /api/health`                         | 健康检查                                                                                          |
 | `GET /api/dashboard`                      | 有界 Dashboard 聚合：7/28 天概览、12 自然周跑量、最近 5 条活动；不返回 samples，无 N+1            |
 | `GET /api/trends`                         | 有界跨活动趋势：`weeks=12\|26\|52`（非法 400），周跑量/次数/配速/加权心率；不返回 samples，无 N+1 |
+| `GET /api/calendar`                       | 闭区间日历投影（≤93 天）：计划训练 + 有界实际活动摘要；SQL 过滤，固定两条查询                     |
+| `POST /api/planned-workouts`              | 创建计划训练，返回持久化后的完整记录                                                              |
+| `PATCH /api/planned-workouts/:workoutId`  | 局部更新（至少一个字段），刷新 updatedAt；不存在 404                                              |
+| `DELETE /api/planned-workouts/:workoutId` | 删除计划训练（204）；不影响活动或导入数据                                                         |
 | `GET /api/activities`                     | 游标分页活动列表；支持 `limit/cursor/dateFrom/dateTo/activityType/sourceType/q`，无 N+1           |
 | `GET /api/activities/:activityId`         | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples**     |
 | `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                                               |

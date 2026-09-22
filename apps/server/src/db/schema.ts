@@ -241,3 +241,19 @@ export const athleteSettings = sqliteTable('athlete_settings', {
   timezoneOffsetMinutes: integer('timezone_offset_minutes').notNull().default(480),
   updatedAt: text('updated_at').notNull(),
 });
+
+export const plannedWorkouts = sqliteTable(
+  'planned_workouts',
+  {
+    id: text('id').primaryKey(),
+    scheduledLocalDate: text('scheduled_local_date').notNull(),
+    workoutType: text('workout_type').notNull(),
+    title: text('title').notNull(),
+    notes: text('notes'),
+    targetDistanceMeters: real('target_distance_meters'),
+    targetDurationSeconds: real('target_duration_seconds'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('planned_workouts_date_idx').on(table.scheduledLocalDate)],
+);

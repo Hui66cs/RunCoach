@@ -2,14 +2,16 @@
 
 ## Approved milestone
 
-M1/M1.1 and M2 are complete and frozen. M2.1 is complete: a repeatable performance baseline was established and accepted; the measured 50k-sample detail/series costs are acceptable for a single-user local application, so premature optimization is deferred. The baseline and known risks remain in `docs/M2_1_PERFORMANCE_BASELINE.md` for future regression use.
+M1/M1.1 and M2 are complete and frozen. M2.1 is complete: a repeatable performance baseline was established and accepted; premature optimization is deferred and the baseline remains in `docs/M2_1_PERFORMANCE_BASELINE.md`. M3 is complete and reviewer-accepted: Dashboard homepage, 12/26/52-week cross-activity trends, and activity-level canonical average heart rate weighted by effective moving duration; record-level heart-rate trends are explicitly future scope.
 
-The approved current milestone is M3: Dashboard and cross-activity trends.
+The approved current milestone is M4: training calendar and local training plans.
 
-### M3 scope and batches
+### M4 scope and batches
 
-1. [x] Batch 1: Dashboard homepage — `/` route, `GET /api/dashboard` (bounded, SQLite-aggregated), 7/28-day summaries, 12-week Monday-start volume trend with zero-filled weeks, up to five recent activities, and full loading/error/empty states.
-2. [x] Batch 2: cross-activity trends page — `/trends` route with 12/26/52-week range switch (`?weeks=` in URL), `GET /api/trends` (bounded, SQLite-aggregated), weekly volume/runs chart, weekly pace (inverted min/km axis) and duration-weighted heart-rate trends with explicit empty states. **Awaiting reviewer acceptance; the rest of M3 is not complete.**
+1. [x] Batch 1: training calendar (`/calendar`), `0003_training_calendar.sql` with the `planned_workouts` table, planned-workout CRUD APIs, and the calendar projection of actual activities. **Implemented, awaiting reviewer acceptance.**
+2. [ ] Batch 2: plan completion status, plan-to-activity links, adherence rate, and weekly rollups (not started).
+
+M4 excludes AI-generated plans, watch/Garmin Connect writes, and all other items in the excluded list below.
 
 Statistics scope for Batch 1: only `activityType = RUN` counts towards volume; windows are closed intervals of local dates ending today (derived from athlete settings timezone offset); activities are attributed by existing `activities.local_date`; moving duration falls back to duration; average pace is summed duration over summed distance.
 
@@ -27,7 +29,7 @@ Batch 2 inherits the same scope and adds duration-weighted weekly/range heart ra
 
 ### Excluded
 
-- Training plans/calendar, daily check-ins, ParroTao online synchronization, DeepSeek, Codex App Server, any AI coach, authentication/multi-user, cloud synchronization, social features, online maps, installers, medical diagnosis, and injury advice.
+- AI-generated training plans, DeepSeek/OpenAI or other model integrations, daily check-ins, ParroTao online synchronization, watch or Garmin Connect writes, authentication/multi-user, cloud synchronization, social features, online maps, installers, medical diagnosis, and injury advice.
 
 ## Acceptance flow
 
@@ -60,6 +62,8 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M2.1 documentation sync and repeatable M2 performance baseline.
 - [x] M2.1 closed: baseline accepted, premature optimization deferred with risks recorded.
 - [x] M3 Batch 1: Dashboard homepage with bounded dashboard API, stats, weekly trend, and recent activities.
+- [x] M3 Batch 2 and M3 acceptance: cross-activity trends page verified by reviewer.
+- [x] M4 Batch 1: training calendar, planned-workout CRUD, and calendar projection (awaiting reviewer acceptance).
 
 ## M2 implementation record
 

@@ -1,6 +1,7 @@
 import { Navigate, NavLink, Outlet, Route, Routes } from 'react-router-dom';
 import { ActivitiesPage } from './pages/ActivitiesPage.js';
 import { ActivityDetailPage } from './pages/ActivityDetailPage.js';
+import { CalendarPage } from './pages/CalendarPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { ImportsPage } from './pages/ImportsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
@@ -22,6 +23,9 @@ function Layout() {
             </NavLink>
             <NavLink to="/trends" className={linkClass}>
               趋势
+            </NavLink>
+            <NavLink to="/calendar" className={linkClass}>
+              日历
             </NavLink>
             <NavLink to="/activities" className={linkClass}>
               活动
@@ -47,6 +51,7 @@ export function App() {
       <Route element={<Layout />}>
         <Route index element={<DashboardPage />} />
         <Route path="trends" element={<TrendsPage />} />
+        <Route path="calendar" element={<CalendarPage />} />
         <Route path="activities" element={<ActivitiesPage />} />
         <Route path="activities/:activityId" element={<ActivityDetailPage />} />
         <Route path="imports" element={<ImportsPage />} />

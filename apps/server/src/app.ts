@@ -7,7 +7,12 @@ import {
   activityPatchSchema,
   activitySeriesQuerySchema,
   athleteSettingsPatchSchema,
+  calendarQuerySchema,
+  calendarResponseSchema,
   dashboardResponseSchema,
+  plannedWorkoutCreateSchema,
+  plannedWorkoutPatchSchema,
+  plannedWorkoutSchema,
   resolveImportSchema,
   trendsQuerySchema,
   trendsResponseSchema,
@@ -105,6 +110,42 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (!query.success)
       return reply.code(400).send({ code: 'INVALID_TRENDS_QUERY', message: '趋势查询参数无效' });
     return trendsResponseSchema.parse(dependencies.repository.getTrends(query.data));
+  });
+
+  app.get('/api/calendar', async (request, reply) => {
+    const query = calendarQuerySchema.safeParse(request.query);
+    if (!query.success)
+      return reply.code(400).send({ code: 'INVALID_CALENDAR_QUERY', message: '日历查询参数无效' });
+    return calendarResponseSchema.parse(dependencies.repository.getCalendarRange(query.data));
+  });
+
+  app.post('/api/planned-workouts', async (request, reply) => {
+    const body = plannedWorkoutCreateSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.code(400).send({ code: 'INVALID_PLANNED_WORKOUT', message: '计划训练内容无效' });
+    return plannedWorkoutSchema.parse(dependencies.repository.createPlannedWorkout(body.data));
+  });
+
+  const workoutParamsSchema = z.object({ workoutId: z.string().uuid() });
+
+  app.patch('/api/planned-workouts/:workoutId', async (request, reply) => {
+    const params = workoutParamsSchema.safeParse(request.params);
+    const body = plannedWorkoutPatchSchema.safeParse(request.body);
+    if (!params.success || !body.success)
+      return reply.code(400).send({ code: 'INVALID_PLANNED_WORKOUT', message: '计划训练修改无效' });
+    const updated = dependencies.repository.updatePlannedWorkout(params.data.workoutId, body.data);
+    if (updated === null)
+      return reply.code(404).send({ code: 'NOT_FOUND', message: '计划训练不存在' });
+    return plannedWorkoutSchema.parse(updated);
+  });
+
+  app.delete('/api/planned-workouts/:workoutId', async (request, reply) => {
+    const params = workoutParamsSchema.safeParse(request.params);
+    if (!params.success)
+      return reply.code(400).send({ code: 'INVALID_PLANNED_WORKOUT', message: '计划训练 ID 无效' });
+    const deleted = dependencies.repository.deletePlannedWorkout(params.data.workoutId);
+    if (!deleted) return reply.code(404).send({ code: 'NOT_FOUND', message: '计划训练不存在' });
+    return reply.code(204).send();
   });
 
   app.get('/api/settings/athlete', () => dependencies.repository.getAthleteSettings());

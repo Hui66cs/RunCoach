@@ -5,7 +5,12 @@ import type {
   ActivitySeriesResponse,
   AthleteSettings,
   AthleteSettingsPatch,
+  CalendarQuery,
+  CalendarResponse,
   DashboardResponse,
+  PlannedWorkout,
+  PlannedWorkoutCreate,
+  PlannedWorkoutPatch,
   TrendsQuery,
   TrendsResponse,
 } from '@runcoach/shared';
@@ -43,6 +48,34 @@ export function getDashboard(): Promise<DashboardResponse> {
 export function getTrends(query: TrendsQuery): Promise<TrendsResponse> {
   const params = new URLSearchParams({ weeks: String(query.weeks) });
   return request(`/api/trends?${params.toString()}`);
+}
+export function getCalendarRange(query: CalendarQuery): Promise<CalendarResponse> {
+  const params = new URLSearchParams({ from: query.from, to: query.to });
+  return request(`/api/calendar?${params.toString()}`);
+}
+export function createPlannedWorkout(body: PlannedWorkoutCreate): Promise<PlannedWorkout> {
+  return request('/api/planned-workouts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+export function updatePlannedWorkout(
+  id: string,
+  patch: PlannedWorkoutPatch,
+): Promise<PlannedWorkout> {
+  return request(`/api/planned-workouts/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+}
+export async function deletePlannedWorkout(id: string): Promise<void> {
+  const response = await fetch(`/api/planned-workouts/${id}`, { method: 'DELETE' });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(body?.message ?? `请求失败：${response.status}`);
+  }
 }
 export function getAthleteSettings(): Promise<AthleteSettings> {
   return request('/api/settings/athlete');

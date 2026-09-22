@@ -1,7 +1,12 @@
 import { expect, test } from '@playwright/test';
 
+// The E2E server uses the default +08:00 local offset, so derive the CSV date
+// from the same offset instead of hard-coding one that ages out of the range.
+const E2E_OFFSET_MINUTES = 480;
+const localToday = new Date(Date.now() + E2E_OFFSET_MINUTES * 60_000).toISOString().slice(0, 10);
+
 const noHeartRateCsv = `活动类型,日期,标题,距离,时间
-跑步,2026-09-19 07:00:00,无心率合成跑,8.01,00:50:54
+跑步,${localToday} 07:00:00,无心率合成跑,8.01,00:50:54
 `;
 
 test('trends page switches ranges, keeps URL state, and shows heart-rate empty state', async ({

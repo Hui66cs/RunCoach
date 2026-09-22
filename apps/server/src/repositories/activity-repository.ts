@@ -25,6 +25,11 @@ import type {
   TrendsQuery,
   TrendsResponse,
   TrendsWeeklyPoint,
+  CalendarQuery,
+  CalendarResponse,
+  PlannedWorkout,
+  PlannedWorkoutCreate,
+  PlannedWorkoutPatch,
 } from '@runcoach/shared';
 import {
   importOutcomeSchema,
@@ -61,6 +66,7 @@ import {
   athleteSettings,
   importItems,
   importJobs,
+  plannedWorkouts,
   rawFiles,
 } from '../db/schema.js';
 import type { StoredRawFile } from '../storage/raw-file-store.js';
@@ -1299,6 +1305,142 @@ export class ActivityRepository {
             : null,
       },
       weeklyPoints,
+    };
+  }
+
+  /**
+   * Bounded calendar projection for a closed local-date range: planned
+   * workouts plus activity summaries, both filtered and ordered in SQL. A
+   * fixed two queries, no per-record lookups, no samples or source data.
+   */
+  getCalendarRange(query: CalendarQuery): CalendarResponse {
+    const plannedRows = this.db
+      .select()
+      .from(plannedWorkouts)
+      .where(
+        and(
+          gte(plannedWorkouts.scheduledLocalDate, query.from),
+          lte(plannedWorkouts.scheduledLocalDate, query.to),
+        ),
+      )
+      .orderBy(
+        asc(plannedWorkouts.scheduledLocalDate),
+        asc(plannedWorkouts.title),
+        asc(plannedWorkouts.id),
+      )
+      .all();
+    const activityRows = this.db
+      .select({
+        id: activities.id,
+        localDate: activities.localDate,
+        activityType: activities.activityType,
+        name: activities.name,
+        distanceMeters: activities.distanceMeters,
+        durationSeconds: activities.durationSeconds,
+        movingDurationSeconds: activities.movingDurationSeconds,
+      })
+      .from(activities)
+      .where(and(gte(activities.localDate, query.from), lte(activities.localDate, query.to)))
+      .orderBy(asc(activities.localDate), asc(activities.startTimeUtc), asc(activities.id))
+      .all();
+    return {
+      from: query.from,
+      to: query.to,
+      plannedWorkouts: plannedRows.map((row) => ({
+        id: row.id,
+        scheduledLocalDate: row.scheduledLocalDate,
+        workoutType: row.workoutType as PlannedWorkout['workoutType'],
+        title: row.title,
+        notes: row.notes,
+        targetDistanceMeters: row.targetDistanceMeters,
+        targetDurationSeconds: row.targetDurationSeconds,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      })),
+      activities: activityRows.map((row) => ({
+        id: row.id,
+        localDate: row.localDate,
+        activityType: row.activityType as CalendarResponse['activities'][number]['activityType'],
+        name: row.name,
+        distanceMeters: row.distanceMeters,
+        durationSeconds: row.durationSeconds,
+        movingDurationSeconds: row.movingDurationSeconds,
+      })),
+    };
+  }
+
+  getPlannedWorkout(workoutId: string): PlannedWorkout | null {
+    const row = this.db
+      .select()
+      .from(plannedWorkouts)
+      .where(eq(plannedWorkouts.id, workoutId))
+      .get();
+    return row === undefined ? null : this.toPlannedWorkout(row);
+  }
+
+  createPlannedWorkout(input: PlannedWorkoutCreate): PlannedWorkout {
+    const id = randomUUID();
+    const timestamp = now();
+    this.db
+      .insert(plannedWorkouts)
+      .values({
+        id,
+        scheduledLocalDate: input.scheduledLocalDate,
+        workoutType: input.workoutType,
+        title: input.title,
+        notes: input.notes ?? null,
+        targetDistanceMeters: input.targetDistanceMeters ?? null,
+        targetDurationSeconds: input.targetDurationSeconds ?? null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      })
+      .run();
+    const created = this.getPlannedWorkout(id);
+    if (created === null) throw new Error('创建计划训练后无法读取记录');
+    return created;
+  }
+
+  updatePlannedWorkout(workoutId: string, patch: PlannedWorkoutPatch): PlannedWorkout | null {
+    const current = this.getPlannedWorkout(workoutId);
+    if (current === null) return null;
+    this.db
+      .update(plannedWorkouts)
+      .set({
+        ...(patch.scheduledLocalDate === undefined
+          ? {}
+          : { scheduledLocalDate: patch.scheduledLocalDate }),
+        ...(patch.workoutType === undefined ? {} : { workoutType: patch.workoutType }),
+        ...(patch.title === undefined ? {} : { title: patch.title }),
+        ...(patch.notes === undefined ? {} : { notes: patch.notes }),
+        ...(patch.targetDistanceMeters === undefined
+          ? {}
+          : { targetDistanceMeters: patch.targetDistanceMeters }),
+        ...(patch.targetDurationSeconds === undefined
+          ? {}
+          : { targetDurationSeconds: patch.targetDurationSeconds }),
+        updatedAt: now(),
+      })
+      .where(eq(plannedWorkouts.id, workoutId))
+      .run();
+    return this.getPlannedWorkout(workoutId);
+  }
+
+  deletePlannedWorkout(workoutId: string): boolean {
+    const result = this.db.delete(plannedWorkouts).where(eq(plannedWorkouts.id, workoutId)).run();
+    return result.changes === 1;
+  }
+
+  private toPlannedWorkout(row: typeof plannedWorkouts.$inferSelect): PlannedWorkout {
+    return {
+      id: row.id,
+      scheduledLocalDate: row.scheduledLocalDate,
+      workoutType: row.workoutType as PlannedWorkout['workoutType'],
+      title: row.title,
+      notes: row.notes,
+      targetDistanceMeters: row.targetDistanceMeters,
+      targetDurationSeconds: row.targetDurationSeconds,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     };
   }
 

@@ -470,6 +470,97 @@ export const trendsResponseSchema = z.object({
 });
 export type TrendsResponse = z.infer<typeof trendsResponseSchema>;
 
+export const plannedWorkoutTypeSchema = z.enum([
+  'EASY_RUN',
+  'LONG_RUN',
+  'TEMPO_RUN',
+  'INTERVAL_RUN',
+  'RECOVERY_RUN',
+  'RACE',
+  'STRENGTH',
+  'REST',
+  'OTHER',
+]);
+export type PlannedWorkoutType = z.infer<typeof plannedWorkoutTypeSchema>;
+
+export const plannedWorkoutSchema = z.object({
+  id: z.string().uuid(),
+  scheduledLocalDate: z.iso.date(),
+  workoutType: plannedWorkoutTypeSchema,
+  title: z.string().min(1).max(120),
+  notes: z.string().max(2000).nullable(),
+  targetDistanceMeters: z.number().finite().positive().nullable(),
+  targetDurationSeconds: z.number().finite().positive().nullable(),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+});
+export type PlannedWorkout = z.infer<typeof plannedWorkoutSchema>;
+
+const targetDistanceMetersSchema = z.number().finite().positive().nullable().optional();
+const targetDurationSecondsSchema = z.number().finite().positive().nullable().optional();
+
+export const plannedWorkoutCreateSchema = z.object({
+  scheduledLocalDate: z.iso.date(),
+  workoutType: plannedWorkoutTypeSchema,
+  title: z.string().trim().min(1).max(120),
+  notes: z.string().max(2000).nullable().optional(),
+  targetDistanceMeters: targetDistanceMetersSchema,
+  targetDurationSeconds: targetDurationSecondsSchema,
+});
+export type PlannedWorkoutCreate = z.infer<typeof plannedWorkoutCreateSchema>;
+
+export const plannedWorkoutPatchSchema = z
+  .object({
+    scheduledLocalDate: z.iso.date().optional(),
+    workoutType: plannedWorkoutTypeSchema.optional(),
+    title: z.string().trim().min(1).max(120).optional(),
+    notes: z.string().max(2000).nullable().optional(),
+    targetDistanceMeters: targetDistanceMetersSchema,
+    targetDurationSeconds: targetDurationSecondsSchema,
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    message: '至少需要修改一个字段',
+  });
+export type PlannedWorkoutPatch = z.infer<typeof plannedWorkoutPatchSchema>;
+
+/** A calendar range spans at most 93 closed local dates (13 full weeks). */
+export const MAX_CALENDAR_DAYS = 93;
+
+export const calendarQuerySchema = z
+  .object({
+    from: z.iso.date(),
+    to: z.iso.date(),
+  })
+  .refine((value) => value.from <= value.to, {
+    message: 'from 不能晚于 to',
+  })
+  .refine(
+    (value) =>
+      (Date.parse(`${value.to}T00:00:00Z`) - Date.parse(`${value.from}T00:00:00Z`)) / 86_400_000 <=
+      MAX_CALENDAR_DAYS - 1,
+    { message: `日期范围最多 ${MAX_CALENDAR_DAYS} 天` },
+  );
+export type CalendarQuery = z.infer<typeof calendarQuerySchema>;
+
+export const calendarActivitySummarySchema = z.object({
+  id: z.string().uuid(),
+  localDate: z.iso.date(),
+  activityType: activityTypeSchema,
+  name: z.string().nullable(),
+  distanceMeters: optionalFiniteNumber,
+  durationSeconds: optionalFiniteNumber,
+  movingDurationSeconds: optionalFiniteNumber,
+});
+export type CalendarActivitySummary = z.infer<typeof calendarActivitySummarySchema>;
+
+export const calendarResponseSchema = z.object({
+  from: z.iso.date(),
+  to: z.iso.date(),
+  plannedWorkouts: z.array(plannedWorkoutSchema),
+  activities: z.array(calendarActivitySummarySchema),
+});
+export type CalendarResponse = z.infer<typeof calendarResponseSchema>;
+
 export const athleteSettingsPatchSchema = z
   .object({
     maxHeartRateBpm: z.number().int().min(100).max(240).nullable().optional(),
