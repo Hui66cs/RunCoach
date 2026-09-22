@@ -133,4 +133,45 @@ describe('activity analytics', () => {
     expect(result.at(-1)?.sequence).toBe(199);
     expect(result.some((sample) => sample.heartRateBpm === 220)).toBe(true);
   });
+
+  it('keeps GPS-only interior route turns instead of collapsing to endpoints', () => {
+    const input: NormalizedSample[] = Array.from({ length: 2000 }, (_, index) => ({
+      sequence: index,
+      timestampUtc: new Date(Date.UTC(2026, 0, 2, 0, 0, index)).toISOString(),
+      elapsedSeconds: index,
+      latitudeDegrees: 30 + Math.min(index, 1999 - index) * 0.0001,
+      longitudeDegrees: 120 + index * 0.0001,
+    }));
+    const peakLatitude = Math.max(...input.map((sample) => sample.latitudeDegrees!));
+    const first = downsampleSeries(input, 1000, ['gps']);
+    const second = downsampleSeries(input, 1000, ['gps']);
+    expect(first).toEqual(second);
+    expect(first.length).toBeLessThanOrEqual(1000);
+    expect(first.length).toBeGreaterThan(2);
+    expect(first[0]?.sequence).toBe(0);
+    expect(first.at(-1)?.sequence).toBe(1999);
+    const sequences = first.map((sample) => sample.sequence);
+    expect([...sequences].sort((a, b) => a - b)).toEqual(sequences);
+    expect(first.some((sample) => sample.latitudeDegrees === peakLatitude)).toBe(true);
+    expect(first.every((sample) => sample.longitudeDegrees != null)).toBe(true);
+  });
+
+  it('keeps GPS turns and heart-rate spikes together when both metrics are requested', () => {
+    const input: NormalizedSample[] = Array.from({ length: 500 }, (_, index) => ({
+      sequence: index,
+      timestampUtc: new Date(Date.UTC(2026, 0, 3, 0, 0, index)).toISOString(),
+      elapsedSeconds: index,
+      latitudeDegrees: 30 + Math.min(index, 499 - index) * 0.0001,
+      longitudeDegrees: 120 + index * 0.0001,
+      heartRateBpm: index === 137 ? 200 : 150,
+    }));
+    const peakLatitude = Math.max(...input.map((sample) => sample.latitudeDegrees!));
+    const result = downsampleSeries(input, 100, ['gps', 'heartRate']);
+    expect(result.length).toBeLessThanOrEqual(100);
+    expect(result.length).toBeGreaterThan(2);
+    expect(result[0]?.sequence).toBe(0);
+    expect(result.at(-1)?.sequence).toBe(499);
+    expect(result.some((sample) => sample.latitudeDegrees === peakLatitude)).toBe(true);
+    expect(result.some((sample) => sample.heartRateBpm === 200)).toBe(true);
+  });
 });

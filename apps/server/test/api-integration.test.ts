@@ -387,6 +387,109 @@ describe('import HTTP API', () => {
     ).toBe(true);
   });
 
+  it('returns meaningful GPS-only series points within bounds and SQL ranges', async () => {
+    const stored = fileStore.save(
+      Buffer.from('gps-only synthetic fit'),
+      'gps-only.fit',
+      'application/octet-stream',
+    );
+    const rawFileId = repository.ensureRawFile(stored);
+    const jobId = repository.createImportJob('FIT', 'gps-only.fit', rawFileId);
+    const itemId = repository.createImportItem(jobId);
+    const normalized: NormalizedActivity = {
+      sourceType: 'FIT',
+      sourceExternalId: null,
+      activityType: 'RUN',
+      startTimeUtc: '2026-09-22T00:00:00.000Z',
+      originalStartTime: '2026-09-22T08:00:00+08:00',
+      timezoneOffsetMinutes: 480,
+      localDate: '2026-09-22',
+      name: 'GPS-only series',
+      notes: null,
+      distanceMeters: null,
+      durationSeconds: 1000,
+      movingDurationSeconds: null,
+      averageHeartRateBpm: null,
+      maxHeartRateBpm: null,
+      deviceName: 'Synthetic',
+      laps: [],
+      rawSummary: {},
+      samples: Array.from({ length: 1000 }, (_, sequence) => ({
+        sequence,
+        timestampUtc: new Date(Date.UTC(2026, 8, 22, 0, 0, sequence)).toISOString(),
+        elapsedSeconds: sequence,
+        latitudeDegrees: 30 + Math.min(sequence, 999 - sequence) * 0.0001,
+        longitudeDegrees: 120 + sequence * 0.0001,
+      })),
+    };
+    const created = repository.createActivityFromSource({
+      normalized,
+      rawFileId,
+      fileSha256: stored.sha256,
+      rawPayload: {},
+      importItemId: itemId,
+    });
+    const peakLatitude = 30 + 499 * 0.0001;
+
+    const gpsSeries = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${created.activityId}/series?metrics=gps&maxPoints=50`,
+    });
+    expect(gpsSeries.statusCode).toBe(200);
+    const gpsBody = gpsSeries.json<{
+      points: Array<{
+        sequence: number;
+        elapsedSeconds: number | null;
+        latitudeDegrees?: number | null;
+        longitudeDegrees?: number | null;
+        heartRateBpm?: number | null;
+      }>;
+      totalPoints: number;
+      returnedPoints: number;
+    }>();
+    expect(gpsBody.totalPoints).toBe(1000);
+    expect(gpsBody.returnedPoints).toBeLessThanOrEqual(50);
+    expect(gpsBody.returnedPoints).toBeGreaterThan(2);
+    expect(gpsBody.points[0]?.sequence).toBe(0);
+    expect(gpsBody.points.at(-1)?.sequence).toBe(999);
+    const sequences = gpsBody.points.map((point) => point.sequence);
+    expect([...sequences].sort((a, b) => a - b)).toEqual(sequences);
+    expect(
+      gpsBody.points.every(
+        (point) => point.latitudeDegrees != null && point.longitudeDegrees != null,
+      ),
+    ).toBe(true);
+    expect(gpsBody.points.some((point) => point.latitudeDegrees === peakLatitude)).toBe(true);
+    expect(gpsBody.points[0]).not.toHaveProperty('heartRateBpm');
+
+    const ranged = await app.inject({
+      method: 'GET',
+      url: `/api/activities/${created.activityId}/series?metrics=gps&from=100&to=200&maxPoints=50`,
+    });
+    expect(ranged.statusCode).toBe(200);
+    const rangedBody = ranged.json<{
+      points: Array<{
+        sequence: number;
+        elapsedSeconds: number | null;
+        latitudeDegrees?: number | null;
+      }>;
+      totalPoints: number;
+      returnedPoints: number;
+    }>();
+    expect(rangedBody.totalPoints).toBe(101);
+    expect(rangedBody.returnedPoints).toBeLessThanOrEqual(50);
+    expect(rangedBody.returnedPoints).toBeGreaterThan(2);
+    expect(
+      rangedBody.points.every(
+        (point) =>
+          point.elapsedSeconds !== null &&
+          point.elapsedSeconds >= 100 &&
+          point.elapsedSeconds <= 200 &&
+          point.latitudeDegrees != null,
+      ),
+    ).toBe(true);
+  });
+
   it('reads, validates, and partially updates athlete settings', async () => {
     const initial = await app.inject({ method: 'GET', url: '/api/settings/athlete' });
     expect(initial.statusCode).toBe(200);

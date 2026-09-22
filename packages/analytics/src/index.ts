@@ -345,6 +345,8 @@ type DownsampleField = Extract<
   | 'powerWatts'
   | 'altitudeMeters'
   | 'distanceMeters'
+  | 'latitudeDegrees'
+  | 'longitudeDegrees'
 >;
 
 const downsampleAllFields: DownsampleField[] = [
@@ -356,23 +358,22 @@ const downsampleAllFields: DownsampleField[] = [
   'distanceMeters',
 ];
 
-const downsampleMetricFields: Record<SeriesMetric, DownsampleField | null> = {
-  heartRate: 'heartRateBpm',
-  speed: 'speedMetersPerSecond',
-  pace: 'speedMetersPerSecond',
-  cadence: 'cadenceStepsPerMinute',
-  power: 'powerWatts',
-  altitude: 'altitudeMeters',
-  distance: 'distanceMeters',
-  gps: null,
+const downsampleMetricFields: Record<SeriesMetric, readonly DownsampleField[]> = {
+  heartRate: ['heartRateBpm'],
+  speed: ['speedMetersPerSecond'],
+  pace: ['speedMetersPerSecond'],
+  cadence: ['cadenceStepsPerMinute'],
+  power: ['powerWatts'],
+  altitude: ['altitudeMeters'],
+  distance: ['distanceMeters'],
+  gps: ['latitudeDegrees', 'longitudeDegrees'],
 };
 
 function resolveDownsampleFields(metrics: readonly SeriesMetric[] | undefined): DownsampleField[] {
   if (metrics === undefined) return [...downsampleAllFields];
   const fields = new Set<DownsampleField>();
   for (const metric of metrics) {
-    const field = downsampleMetricFields[metric];
-    if (field !== null) fields.add(field);
+    for (const field of downsampleMetricFields[metric]) fields.add(field);
   }
   return fields.size > 0 ? [...fields] : [...downsampleAllFields];
 }
@@ -381,13 +382,15 @@ function resolveDownsampleFields(metrics: readonly SeriesMetric[] | undefined): 
  * Deterministic, bounded, extrema-preserving downsampling.
  *
  * Endpoints are always retained. The interior is split into buckets and, for
- * every requested numeric metric field independently, the bucket minimum and
- * maximum samples are retained. Fields are never compared against each other,
- * so a high-magnitude field such as cumulative distance cannot suppress a
- * heart-rate, power, or speed spike in another requested metric. Each field
- * gets an equal share of the `maxPoints` budget, so the result stays within
- * `maxPoints` without a trimming pass in normal cases. Ties keep the earliest
- * index, keeping the output deterministic.
+ * every requested metric field independently, the bucket minimum and maximum
+ * samples are retained. A metric may map to several fields: `gps` selects on
+ * `latitudeDegrees` and `longitudeDegrees` separately, so a route turn that is
+ * a latitude or longitude extremum is kept. Fields are never compared against
+ * each other, so a high-magnitude field such as cumulative distance cannot
+ * suppress a heart-rate, power, or speed spike in another requested metric.
+ * Every field gets an equal share of the `maxPoints` budget, so the result
+ * stays within `maxPoints` without a trimming pass in normal cases. Ties keep
+ * the earliest index, keeping the output deterministic.
  */
 export function downsampleSeries(
   samples: NormalizedSample[],
