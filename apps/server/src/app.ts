@@ -7,6 +7,7 @@ import {
   activityPatchSchema,
   activitySeriesQuerySchema,
   athleteSettingsPatchSchema,
+  dashboardResponseSchema,
   resolveImportSchema,
 } from '@runcoach/shared';
 import type { AppConfig } from './config.js';
@@ -92,6 +93,10 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       });
     }
   });
+
+  app.get('/api/dashboard', () =>
+    dashboardResponseSchema.parse(dependencies.repository.getDashboard()),
+  );
 
   app.get('/api/settings/athlete', () => dependencies.repository.getAthleteSettings());
 

@@ -2,7 +2,9 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const directories = ['.e2e-data-upgrade', '.e2e-data-pending'].map((name) => path.resolve(name));
+const directories = ['.e2e-data-upgrade', '.e2e-data-pending', '.e2e-data-dashboard'].map((name) =>
+  path.resolve(name),
+);
 const clean = () => {
   for (const directory of directories) fs.rmSync(directory, { recursive: true, force: true });
 };

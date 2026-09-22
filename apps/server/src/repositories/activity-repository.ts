@@ -10,6 +10,9 @@ import type {
   ActivitySeriesResponse,
   AthleteSettings,
   AthleteSettingsPatch,
+  DashboardPeriodSummary,
+  DashboardResponse,
+  DashboardWeeklyVolume,
   ImportOutcome,
   ImportHistoryPage,
   MatchDecision,
@@ -38,6 +41,13 @@ import {
   paceSecondsPerKilometer,
 } from '@runcoach/analytics';
 import type { RunCoachDatabase } from '../db/client.js';
+import {
+  eachLocalDate,
+  lastDaysWindow,
+  localDateFromUtcTime,
+  weeklyWindows,
+  type LocalDateWindow,
+} from '../dashboard-dates.js';
 import {
   activities,
   activityFieldProvenance,
@@ -1067,6 +1077,101 @@ export class ActivityRepository {
       totalPoints: rows.length,
       returnedPoints: points.length,
       points,
+    };
+  }
+
+  /**
+   * Bounded cross-activity dashboard summary. Runs are aggregated in SQLite by
+   * `local_date` over the 12-week window; two queries total, no per-activity
+   * source lookups and no samples. `todayLocalDate` defaults to the local date
+   * derived from the athlete settings timezone offset and may be injected in
+   * tests for deterministic windows.
+   */
+  getDashboard(todayLocalDate?: string): DashboardResponse {
+    const settings = this.getAthleteSettings();
+    const today =
+      todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);
+    const weeks = weeklyWindows(today, 12);
+    const earliest = weeks[0]!.startLocalDate;
+    const dailyRows = this.db
+      .select({
+        localDate: activities.localDate,
+        runs: sql<number>`count(*)`,
+        totalDistanceMeters: sql<number>`coalesce(sum(${activities.distanceMeters}), 0)`,
+        totalMovingDurationSeconds: sql<number>`coalesce(sum(coalesce(${activities.movingDurationSeconds}, ${activities.durationSeconds})), 0)`,
+      })
+      .from(activities)
+      .where(
+        and(
+          eq(activities.activityType, 'RUN'),
+          gte(activities.localDate, earliest),
+          lte(activities.localDate, today),
+        ),
+      )
+      .groupBy(activities.localDate)
+      .all();
+    const byDate = new Map(dailyRows.map((row) => [row.localDate, row]));
+    const summarizeWindow = (window: LocalDateWindow): DashboardPeriodSummary => {
+      let runs = 0;
+      let totalDistanceMeters = 0;
+      let totalMovingDurationSeconds = 0;
+      for (const date of eachLocalDate(window)) {
+        const row = byDate.get(date);
+        if (row === undefined) continue;
+        runs += Number(row.runs);
+        totalDistanceMeters += Number(row.totalDistanceMeters);
+        totalMovingDurationSeconds += Number(row.totalMovingDurationSeconds);
+      }
+      return {
+        runs,
+        totalDistanceMeters,
+        totalMovingDurationSeconds,
+        averagePaceSecondsPerKilometer:
+          totalDistanceMeters > 0
+            ? (totalMovingDurationSeconds / totalDistanceMeters) * 1000
+            : null,
+      };
+    };
+    const weeklyVolumes: DashboardWeeklyVolume[] = weeks.map((week) => {
+      const summary = summarizeWindow(week);
+      return {
+        weekStartLocalDate: week.startLocalDate,
+        weekEndLocalDate: week.endLocalDate,
+        runs: summary.runs,
+        totalDistanceMeters: summary.totalDistanceMeters,
+        totalMovingDurationSeconds: summary.totalMovingDurationSeconds,
+      };
+    });
+    const recentRows = this.db
+      .select({
+        id: activities.id,
+        localDate: activities.localDate,
+        name: activities.name,
+        activityType: activities.activityType,
+        distanceMeters: activities.distanceMeters,
+        durationSeconds: activities.durationSeconds,
+        movingDurationSeconds: activities.movingDurationSeconds,
+      })
+      .from(activities)
+      .orderBy(desc(activities.localDate), desc(activities.startTimeUtc))
+      .limit(5)
+      .all();
+    return {
+      generatedForLocalDate: today,
+      timezoneOffsetMinutes: settings.timezoneOffsetMinutes,
+      last7Days: summarizeWindow(lastDaysWindow(today, 7)),
+      last28Days: summarizeWindow(lastDaysWindow(today, 28)),
+      weeklyVolumes,
+      recentActivities: recentRows.map((row) => ({
+        id: row.id,
+        localDate: row.localDate,
+        name: row.name,
+        activityType:
+          row.activityType as DashboardResponse['recentActivities'][number]['activityType'],
+        distanceMeters: row.distanceMeters,
+        durationSeconds: row.durationSeconds,
+        movingDurationSeconds: row.movingDurationSeconds,
+      })),
     };
   }
 

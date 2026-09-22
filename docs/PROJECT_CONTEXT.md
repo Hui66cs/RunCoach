@@ -2,7 +2,7 @@
 
 > 建议落盘位置：`docs/PROJECT_CONTEXT.md`
 > 项目仓库：<https://github.com/Hui66cs/RunCoach>（默认分支为 `master`）
-> 当前基线：`master` 分支提交 `e5e7239`（M2 完成）。本文在 M2.1 第一批（文档同步与性能基线）时更新，此前版本基于 `07b9042`（M1.1 阶段完成）编写。
+> 当前基线：`master` 分支，当前里程碑 M3（Dashboard 与跨活动趋势）。M2 与 M2.1 均已完成并冻结；此前版本分别基于 `07b9042`（M1.1）与 `e5e7239`（M2）编写。
 > 状态标记：**已实现**表示当前代码具备；**已决定、未实现**表示后续应遵守的设计；**不确定**表示必须重新查证，不能自行假设。
 
 ## 1. 项目总体目标
@@ -42,17 +42,25 @@ RunCoach Local 是一个面向单用户的本地优先跑步训练管理 Web 应
 - 服务端有界降采样（保留请求指标极值，含 GPS）、图表 zoom 驱动的范围刷新、离线轨迹轮廓。
 - `0002_activity_analysis.sql` forward-only migration；单元、集成、Playwright、build、CI 覆盖。
 
-### 当前里程碑 M2.1（性能与可靠性加固，进行中）
+### 已完成的 M2.1（性能与可靠性加固）
 
-- M2.1 不增加任何新产品模块。
-- 固定顺序：a) 文档同步与可重复性能基线；b) reviewer 依据基线选择真实热点；c) 分批优化；d) 回归与阶段验收。
-- 已完成 a)：`pnpm benchmark:m2` 基准工具与 `docs/M2_1_PERFORMANCE_BASELINE.md` 基线记录。
-- 当前已知性能风险（均为基线测量所得，详见基线文档）：`getActivity()` 为计算派生摘要与分析会读取该活动全部 samples，耗时随样本数近线性增长；`/series` 先在 SQL 中按范围过滤，但仍会把范围内全部行读入应用层降采样。
-- b)–d) 尚未开始；不得依据基线自行决定优化方案。
+- 已建立可重复性能基线：`pnpm benchmark:m2`，结果记录于 `docs/M2_1_PERFORMANCE_BASELINE.md`。
+- 结论：当前 50k samples 的 detail/series 耗时对本地单用户应用可接受，暂不继续提前优化。
+- 已知性能风险保留供未来回归：`getActivity()` 为计算派生摘要与分析会读取该活动全部 samples，耗时随样本数近线性增长；`/series` 先在 SQL 中按范围过滤，但仍会把范围内全部行读入应用层降采样。
+
+### 当前里程碑 M3（Dashboard 与跨活动趋势，进行中）
+
+- Batch 1 已交付：`/` Dashboard 首页 + `GET /api/dashboard` 有界聚合 API。
+  - 最近 7 天 / 28 天概览：跑步次数、总距离、总移动时长、平均配速；仅统计 `activityType = RUN`。
+  - 最近 12 个自然周跑量趋势：周一开始、含当前周、无活动周补零。
+  - 最近活动：最多 5 条，链接到既有详情页。
+  - 统计口径：闭区间本地日期（“今天”由 athlete settings 的 timezoneOffsetMinutes 计算）；活动归属使用既有 `activities.local_date`；移动时长优先 `movingDurationSeconds`、回退 `durationSeconds`、缺失按 0；平均配速 = 总移动时长 / 总距离 × 1000，总距离为 0 时为 null。
+  - 聚合在 SQLite 按 `local_date` 分组完成（两条查询），无逐活动 sources N+1，不返回 samples。
+- Batch 2+（更广泛的跨活动趋势）尚未开始，范围需与 reviewer 确认。
 
 ### 冻结不做（跨里程碑有效）
 
-- 首页 dashboard、跨活动长期趋势和成就系统。
+- 成就系统。
 - 每日状态/疲劳打卡。
 - 训练日历和训练计划。
 - ParroTao 在线同步的实际网络实现。
@@ -106,12 +114,12 @@ RunCoach/
 │     ├─ storage/raw-file-store.ts
 │     └─ errors.ts
 ├─ apps/web/src/
-│  ├─ App.tsx                   # 正式路由壳（/activities、/imports、/settings）
+│  ├─ App.tsx                   # 正式路由壳（/、/activities、/imports、/settings）
 │  ├─ api.ts / imports-api.ts
 │  ├─ SeriesChart.tsx           # ECharts 有界曲线，zoom 驱动范围刷新
-│  ├─ pages/                    # ActivitiesListPage、ActivityDetailPage、SettingsPage 等
+│  ├─ pages/                    # DashboardPage、ActivitiesListPage、ActivityDetailPage、SettingsPage 等
 │  ├─ format.ts
-│  └─ components/               # Import、Pending、History、ConfirmDialog、RoutePreview
+│  └─ components/               # WeeklyVolumeChart、Import、Pending、History、ConfirmDialog、RoutePreview
 ├─ packages/shared/src/index.ts # Zod schema、domain types、API DTO
 ├─ packages/importers/src/
 │  ├─ csv-adapter.ts
@@ -156,6 +164,7 @@ RunCoach/
 | 方法与路径                                | 当前行为                                                                                      |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `GET /api/health`                         | 健康检查                                                                                      |
+| `GET /api/dashboard`                      | 有界 Dashboard 聚合：7/28 天概览、12 自然周跑量、最近 5 条活动；不返回 samples，无 N+1        |
 | `GET /api/activities`                     | 游标分页活动列表；支持 `limit/cursor/dateFrom/dateTo/activityType/sourceType/q`，无 N+1       |
 | `GET /api/activities/:activityId`         | 返回活动、sources、laps、provenance、merge events、derivedSummary、analysis；**不含 samples** |
 | `PATCH /api/activities/:activityId`       | 修改名称/备注并标记 USER provenance                                                           |

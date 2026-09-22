@@ -6,9 +6,9 @@ RunCoach Local is a single-user, local-first running training web application fo
 
 ## Current milestone
 
-Follow `PLAN.md`. M1/M1.1 import and merge, and M2 formal activity records, deterministic single-activity analysis, athlete settings, and bounded series APIs are complete, accepted, and frozen; all of them must remain compatible (`docs/M2_ACCEPTANCE.md`).
+Follow `PLAN.md`. M1/M1.1 import and merge, M2 formal activity records, deterministic single-activity analysis, athlete settings, and bounded series APIs, and M2.1 performance hardening are complete, accepted, and frozen; all of them must remain compatible (`docs/M2_ACCEPTANCE.md`, `docs/M2_1_PERFORMANCE_BASELINE.md`). M2.1 established a repeatable performance baseline (`pnpm benchmark:m2`); the measured detail/series costs at 50k samples are acceptable for a single-user local application, so no further premature optimization is planned. The baseline and known risks remain recorded for future regression use.
 
-The approved current milestone is M2.1: performance and reliability hardening. M2.1 adds no new product modules. Its order is fixed: (a) documentation sync and a repeatable M2 performance baseline (`pnpm benchmark:m2`, results in `docs/M2_1_PERFORMANCE_BASELINE.md`); (b) the reviewer selects real hotspots based on that baseline; (c) batched optimizations; (d) regression and milestone acceptance. Do not start (b)–(d) or decide optimization approaches before the reviewer has picked hotspots. Do not add a dashboard, cross-activity trends, training plans/calendar, daily check-ins, ParroTao online sync, AI providers, authentication, cloud deployment, social features, online maps, installers, or medical conclusions.
+The approved current milestone is M3: Dashboard and cross-activity trends; the dashboard is no longer excluded scope. Batch 1 delivers the user-facing Dashboard homepage (`/` route backed by `GET /api/dashboard`). Later M3 batches cover broader cross-activity trends; do not mark unplanned M3 features as done. Do not add training plans/calendar, daily check-ins, ParroTao online sync, AI providers, authentication/multi-user, cloud deployment, social features, online maps, installers, or medical conclusions.
 
 ## Commands
 

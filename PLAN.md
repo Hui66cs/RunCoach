@@ -2,16 +2,16 @@
 
 ## Approved milestone
 
-M1/M1.1 and M2 are complete and frozen. The approved current milestone is M2.1: performance and reliability hardening. M2.1 adds no new product modules.
+M1/M1.1 and M2 are complete and frozen. M2.1 is complete: a repeatable performance baseline was established and accepted; the measured 50k-sample detail/series costs are acceptable for a single-user local application, so premature optimization is deferred. The baseline and known risks remain in `docs/M2_1_PERFORMANCE_BASELINE.md` for future regression use.
 
-### M2.1 order and scope
+The approved current milestone is M3: Dashboard and cross-activity trends.
 
-1. [x] Documentation sync and a repeatable M2 performance baseline (`pnpm benchmark:m2`, baseline recorded in `docs/M2_1_PERFORMANCE_BASELINE.md`).
-2. [ ] Reviewer selects the real hotspots based on the recorded baseline.
-3. [ ] Batched optimizations of the selected hotspots.
-4. [ ] Regression runs and M2.1 acceptance.
+### M3 scope and batches
 
-Optimization approaches are not decided in advance; step 2 gates step 3.
+1. [x] Batch 1: Dashboard homepage — `/` route, `GET /api/dashboard` (bounded, SQLite-aggregated), 7/28-day summaries, 12-week Monday-start volume trend with zero-filled weeks, up to five recent activities, and full loading/error/empty states.
+2. [ ] Batch 2+: broader cross-activity trends (scope to be defined with the reviewer before starting).
+
+Statistics scope for Batch 1: only `activityType = RUN` counts towards volume; windows are closed intervals of local dates ending today (derived from athlete settings timezone offset); activities are attributed by existing `activities.local_date`; moving duration falls back to duration; average pace is summed duration over summed distance.
 
 ### M2 included
 
@@ -25,7 +25,7 @@ Optimization approaches are not decided in advance; step 2 gates step 3.
 
 ### Excluded
 
-- Dashboard, cross-activity trends, training plans/calendar, daily check-ins, ParroTao online synchronization, DeepSeek, Codex App Server, any AI coach, authentication/multi-user, cloud synchronization, social features, online maps, installers, medical diagnosis, and injury advice.
+- Training plans/calendar, daily check-ins, ParroTao online synchronization, DeepSeek, Codex App Server, any AI coach, authentication/multi-user, cloud synchronization, social features, online maps, installers, medical diagnosis, and injury advice.
 
 ## Acceptance flow
 
@@ -56,6 +56,8 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M2 routed application UI, charts, splits, route outline, and data details.
 - [x] M2 final full-suite/private-fixture acceptance and handoff documentation.
 - [x] M2.1 documentation sync and repeatable M2 performance baseline.
+- [x] M2.1 closed: baseline accepted, premature optimization deferred with risks recorded.
+- [x] M3 Batch 1: Dashboard homepage with bounded dashboard API, stats, weekly trend, and recent activities.
 
 ## M2 implementation record
 

@@ -392,6 +392,44 @@ export interface PauseAnalysisValue {
   pauseCount: number;
 }
 
+export const dashboardPeriodSummarySchema = z.object({
+  runs: z.number().int().nonnegative(),
+  totalDistanceMeters: z.number().nonnegative(),
+  totalMovingDurationSeconds: z.number().nonnegative(),
+  averagePaceSecondsPerKilometer: z.number().positive().nullable(),
+});
+export type DashboardPeriodSummary = z.infer<typeof dashboardPeriodSummarySchema>;
+
+export const dashboardWeeklyVolumeSchema = z.object({
+  weekStartLocalDate: z.iso.date(),
+  weekEndLocalDate: z.iso.date(),
+  runs: z.number().int().nonnegative(),
+  totalDistanceMeters: z.number().nonnegative(),
+  totalMovingDurationSeconds: z.number().nonnegative(),
+});
+export type DashboardWeeklyVolume = z.infer<typeof dashboardWeeklyVolumeSchema>;
+
+export const dashboardRecentActivitySchema = z.object({
+  id: z.string().uuid(),
+  localDate: z.iso.date(),
+  name: z.string().nullable(),
+  activityType: activityTypeSchema,
+  distanceMeters: optionalFiniteNumber,
+  durationSeconds: optionalFiniteNumber,
+  movingDurationSeconds: optionalFiniteNumber,
+});
+export type DashboardRecentActivity = z.infer<typeof dashboardRecentActivitySchema>;
+
+export const dashboardResponseSchema = z.object({
+  generatedForLocalDate: z.iso.date(),
+  timezoneOffsetMinutes: z.number().int().min(-840).max(840),
+  last7Days: dashboardPeriodSummarySchema,
+  last28Days: dashboardPeriodSummarySchema,
+  weeklyVolumes: z.array(dashboardWeeklyVolumeSchema).max(12),
+  recentActivities: z.array(dashboardRecentActivitySchema).max(5),
+});
+export type DashboardResponse = z.infer<typeof dashboardResponseSchema>;
+
 export const athleteSettingsPatchSchema = z
   .object({
     maxHeartRateBpm: z.number().int().min(100).max(240).nullable().optional(),

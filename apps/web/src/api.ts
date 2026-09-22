@@ -5,6 +5,7 @@ import type {
   ActivitySeriesResponse,
   AthleteSettings,
   AthleteSettingsPatch,
+  DashboardResponse,
 } from '@runcoach/shared';
 
 export async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -33,6 +34,9 @@ export function updateActivity(id: string, patch: ActivityPatch): Promise<Activi
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
   });
+}
+export function getDashboard(): Promise<DashboardResponse> {
+  return request('/api/dashboard');
 }
 export function getAthleteSettings(): Promise<AthleteSettings> {
   return request('/api/settings/athlete');
