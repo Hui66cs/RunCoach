@@ -1,6 +1,6 @@
 # RunCoach Local
 
-RunCoach Local is a single-user, local-first running activity manager. M1/M1.1 provide durable CSV/FIT import and canonical merging. M2 adds formal activity browsing, bounded time-series retrieval, deterministic single-run analysis, and local athlete settings. M3 adds the Dashboard homepage and 12/26/52-week cross-activity trends. M4 adds the training calendar, planned workouts, plan completion status, manual plan-to-activity links, and adherence rollups. M5 Batch 1 adds athlete profile fields and the daily-status data/API foundation (frontend entry points come in a later batch). Everything runs and stays on this machine.
+RunCoach Local is a single-user, local-first running activity manager. M1/M1.1 provide durable CSV/FIT import and canonical merging. M2 adds formal activity browsing, bounded time-series retrieval, deterministic single-run analysis, and local athlete settings. M3 adds the Dashboard homepage and 12/26/52-week cross-activity trends. M4 adds the training calendar, planned workouts, plan completion status, manual plan-to-activity links, and adherence rollups. M5 adds athlete profile fields, the daily-status page, and the Dashboard daily loop (today's status, today's plans, weekly distance) that connects recording status, importing activities, and completing/ linking plans in the calendar. Everything runs and stays on this machine.
 
 ## Requirements
 

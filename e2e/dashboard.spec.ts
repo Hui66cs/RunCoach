@@ -49,7 +49,9 @@ test('dashboard loads, shows the empty state, then stats, weekly trend, and rece
   await page.locator('a[href^="/activities/"]').first().click();
   await expect(page.getByRole('heading', { name: '公开合成跑步' })).toBeVisible();
 
-  await page.getByRole('link', { name: '活动' }).click();
+  // exact:true — the nav link is 活动; the detail page also has a
+  // "← 返回活动列表" link whose accessible name contains 活动.
+  await page.getByRole('link', { name: '活动', exact: true }).click();
   await expect(page.getByText('共 1 条活动')).toBeVisible();
   await page.getByRole('link', { name: '导入' }).click();
   await expect(page.getByLabel('导入活动 CSV')).toBeVisible();
@@ -388,12 +390,25 @@ test('daily loop: plan today, record status, import, complete with link, dashboa
   await page.goto('/');
   const today = (await page.getByTestId('dashboard-today-date').textContent())?.trim() ?? '';
   expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  // Baseline weekly distance BEFORE this test imports anything. The shared
+  // e2e data directory may already contain activities from earlier tests, so
+  // the loop is verified by the delta, never by assuming an initial zero.
+  const weeklyBefore = await readWeeklyActualKm(page);
 
   // A weekly target is needed for the weekly-distance card.
   await page.goto('/settings');
   await page.getByLabel('每周跑量目标（km）').fill('50');
   await page.getByRole('button', { name: '保存档案' }).click();
   await expect(page.getByText('运动员档案已保存。')).toBeVisible();
+
+  // A daily-status entry may already exist for today (an earlier test in this
+  // shared data directory); snapshot it so cleanup can restore it instead of
+  // destroying another test's data.
+  const existingStatus = await page.request.get(`/api/daily-status?from=${today}&to=${today}`);
+  const existingItems = existingStatus.ok()
+    ? ((await existingStatus.json()) as { items: Array<Record<string, unknown>> }).items
+    : [];
+  const previousStatus = existingItems[0] ?? null;
 
   // Step 1: create today's plan in the calendar; the 添加训练 dialog must
   // default to the canonical today (never the browser date).
@@ -473,6 +488,14 @@ test('daily loop: plan today, record status, import, complete with link, dashboa
   const dashboardWeeklyCard = page.getByTestId('dashboard-weekly-card');
   await expect(dashboardWeeklyCard.getByTestId('dashboard-weekly-actual')).toBeVisible();
   await expect(dashboardWeeklyCard.getByTestId('dashboard-weekly-percent')).toBeVisible();
+  // The imported 4.00 km must actually be counted into the current week: the
+  // actual distance grows by exactly the import (± 2-decimal rounding) on top
+  // of whatever the shared data directory already contained.
+  const weeklyAfter = await readWeeklyActualKm(page);
+  expect(weeklyAfter).not.toBeNull();
+  const weeklyDelta = (weeklyAfter ?? 0) - (weeklyBefore ?? 0);
+  expect(weeklyDelta).toBeGreaterThanOrEqual(3.99);
+  expect(weeklyDelta).toBeLessThanOrEqual(4.01);
 
   // Step 6: everything survives a reload.
   await page.reload();
@@ -480,7 +503,13 @@ test('daily loop: plan today, record status, import, complete with link, dashboa
   await expect(plansCard.getByText('已完成', { exact: true }).first()).toBeVisible();
   await expect(page.getByTestId('dashboard-status-card')).toContainText('4/5');
 
-  // Cleanup: remove only the data this test created.
+  // Cleanup removes only data this test owns:
+  // - the two plans it created;
+  // - the daily-status entry it wrote (restoring the pre-existing entry from
+  //   the snapshot, deleting only when this test created it).
+  // The imported activity has no delete API by design (M1–M4 semantics); it
+  // stays solely inside the disposable, git-ignored e2e data directory
+  // (.e2e-data-dashboard), which is never committed or shipped.
   const day = await page.request.get(`/api/calendar?from=${today}&to=${today}`);
   const dayBody = (await day.json()) as { plannedWorkouts: Array<{ id: string; title: string }> };
   for (const workout of dayBody.plannedWorkouts) {
@@ -489,6 +518,39 @@ test('daily loop: plan today, record status, import, complete with link, dashboa
       expect(deleted.ok()).toBe(true);
     }
   }
-  const statusDeleted = await page.request.delete(`/api/daily-status/${today}`);
-  expect(statusDeleted.ok()).toBe(true);
+  const currentStatus = await page.request.get(`/api/daily-status?from=${today}&to=${today}`);
+  const currentItems = currentStatus.ok()
+    ? ((await currentStatus.json()) as { items: Array<Record<string, unknown>> }).items
+    : [];
+  const wroteStatus = currentItems[0] !== undefined;
+  if (previousStatus !== null) {
+    // Restore the earlier test's entry field-for-field instead of deleting
+    // it; only the editable fields are sent (the upsert schema is strict).
+    const statusKeys = [
+      'sleepQuality',
+      'fatigueLevel',
+      'muscleSorenessLevel',
+      'stressLevel',
+      'motivationLevel',
+      'restingHeartRateBpm',
+      'notes',
+    ] as const;
+    const restored = await page.request.put(`/api/daily-status/${today}`, {
+      data: Object.fromEntries(statusKeys.map((key) => [key, previousStatus[key] ?? null])),
+    });
+    expect(restored.ok()).toBe(true);
+  } else if (wroteStatus) {
+    const statusDeleted = await page.request.delete(`/api/daily-status/${today}`);
+    expect(statusDeleted.ok()).toBe(true);
+  }
 });
+
+/** Reads the Dashboard weekly-distance card value ("X.XX km"); null when the
+ * card shows no target and therefore no actual distance. */
+async function readWeeklyActualKm(page: Page): Promise<number | null> {
+  const actual = page.getByTestId('dashboard-weekly-actual');
+  if ((await actual.count()) === 0) return null;
+  const text = (await actual.textContent()) ?? '';
+  const match = /(-?[\d.]+) km/.exec(text);
+  return match === null ? null : Number(match[1]);
+}
