@@ -182,6 +182,11 @@ export function CalendarPage() {
 
   const invalidateCalendarData = () => {
     void client.invalidateQueries({ queryKey: ['calendar'] });
+    // The Dashboard's daily-loop cards read the same data under the
+    // 'calendar-plan' key (keyed by their own window); prefix-invalidating
+    // keeps them consistent after cross-page edits without touching other
+    // cached queries.
+    void client.invalidateQueries({ queryKey: ['calendar-plan'] });
     void client.invalidateQueries({ queryKey: ['training-summary'] });
   };
 

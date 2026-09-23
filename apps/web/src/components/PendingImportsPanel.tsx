@@ -22,6 +22,10 @@ export function PendingImportsPanel() {
         queryClient.invalidateQueries({ queryKey: ['imports'] }),
         queryClient.invalidateQueries({ queryKey: ['activities'] }),
         queryClient.invalidateQueries({ queryKey: ['activity'] }),
+        // A resolved import adds a real activity, which affects the
+        // Dashboard's recent stats and weekly distance.
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['calendar-plan'] }),
       ]);
     },
   });

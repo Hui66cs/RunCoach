@@ -379,3 +379,116 @@ test('weekly progress keeps the real text percentage but caps the bar at 100', a
   await expect(bar).toHaveAttribute('aria-valuenow', '100');
   await expect(bar.locator('div').first()).toHaveAttribute('style', /width:\s*100%/);
 });
+
+test('daily loop: plan today, record status, import, complete with link, dashboard reflects it', async ({
+  page,
+}) => {
+  // Canonical today always comes from the dashboard response, never the run
+  // date; every step below derives from it.
+  await page.goto('/');
+  const today = (await page.getByTestId('dashboard-today-date').textContent())?.trim() ?? '';
+  expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+  // A weekly target is needed for the weekly-distance card.
+  await page.goto('/settings');
+  await page.getByLabel('每周跑量目标（km）').fill('50');
+  await page.getByRole('button', { name: '保存档案' }).click();
+  await expect(page.getByText('运动员档案已保存。')).toBeVisible();
+
+  // Step 1: create today's plan in the calendar; the 添加训练 dialog must
+  // default to the canonical today (never the browser date).
+  await page.goto('/calendar');
+  await page.getByRole('button', { name: '添加训练', exact: true }).click();
+  await expect(page.getByLabel('日期')).toHaveValue(today);
+  await page.getByLabel('标题').fill('E2E 闭环跑');
+  await page.getByRole('button', { name: '保存' }).click();
+  await expect(page.getByTitle(/E2E 闭环跑（(待完成|已逾期)，点击编辑）/).first()).toBeVisible();
+
+  // Step 2: record today's status through the dashboard entry point.
+  await page.goto('/');
+  await page.getByRole('link', { name: '记录今日状态' }).click();
+  await expect(page.getByTestId('daily-status-current-date')).toHaveText(`当前日期：${today}`);
+  await page.getByRole('radio', { name: '睡眠质量 4' }).check();
+  await page.getByRole('radio', { name: '疲劳程度 2' }).check();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByTestId('daily-status-saved')).toBeVisible();
+
+  // Step 3: import a real RUN activity dated today through the CSV flow
+  // (distinct time and title keep its identity separate from other tests).
+  await page.goto('/imports');
+  await page.getByLabel('导入活动 CSV').setInputFiles({
+    name: 'loop.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(
+      `活动类型,日期,标题,距离,时间\n跑步,${today} 09:30:00,E2E 闭环跑步,4.00,00:25:00\n`,
+    ),
+  });
+  await page.getByRole('button', { name: '开始导入' }).first().click();
+
+  // Step 4: the user manually links the imported activity to the plan and
+  // completes it in the calendar.
+  await page.goto('/calendar');
+  await page
+    .getByTitle(/E2E 闭环跑（(待完成|已逾期)，点击编辑）/)
+    .first()
+    .click();
+  const select = page.getByLabel('关联实际活动并完成', { exact: true });
+  const optionValue = await select
+    .locator('option', { hasText: 'E2E 闭环跑步' })
+    .getAttribute('value');
+  expect(optionValue).not.toBeNull();
+  await select.selectOption(optionValue);
+  await page.getByRole('button', { name: '关联并完成' }).click();
+  await expect(page.getByTestId('completion-status')).toHaveText('已完成');
+  await expect(page.getByText('已关联实际活动')).toBeVisible();
+  await page.getByRole('button', { name: '关闭' }).click();
+
+  // Failure must not pretend success: a second plan trying to link the same
+  // activity surfaces the 409 and stays PLANNED, then it is removed again.
+  await page.getByRole('button', { name: '添加训练', exact: true }).click();
+  await page.getByLabel('标题').fill('E2E 闭环第二项');
+  await page.getByRole('button', { name: '保存' }).click();
+  await page
+    .getByTitle(/E2E 闭环第二项（(待完成|已逾期)，点击编辑）/)
+    .first()
+    .click();
+  const secondSelect = page.getByLabel('关联实际活动并完成', { exact: true });
+  await secondSelect.selectOption(optionValue);
+  await page.getByRole('button', { name: '关联并完成' }).click();
+  await expect(page.getByTestId('completion-error')).toHaveText('该实际活动已关联其他计划训练');
+  await expect(page.getByTestId('completion-status')).toHaveText(/待完成|已逾期/);
+  await page.getByRole('button', { name: '关闭' }).click();
+
+  // Step 5: the dashboard reflects every step of the loop.
+  await page.goto('/');
+  const plansCard = page.getByTestId('dashboard-plans-card');
+  await expect(plansCard).toContainText('E2E 闭环跑');
+  await expect(plansCard.getByText('已完成', { exact: true }).first()).toBeVisible();
+  await expect(plansCard.getByRole('link', { name: 'E2E 闭环跑步' })).toHaveAttribute(
+    'href',
+    /\/activities\//,
+  );
+  await expect(page.getByTestId('dashboard-status-card')).toContainText('4/5');
+  await expect(page.getByTestId('dashboard-status-card')).toContainText('2/5');
+  const dashboardWeeklyCard = page.getByTestId('dashboard-weekly-card');
+  await expect(dashboardWeeklyCard.getByTestId('dashboard-weekly-actual')).toBeVisible();
+  await expect(dashboardWeeklyCard.getByTestId('dashboard-weekly-percent')).toBeVisible();
+
+  // Step 6: everything survives a reload.
+  await page.reload();
+  await expect(plansCard).toContainText('E2E 闭环跑');
+  await expect(plansCard.getByText('已完成', { exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId('dashboard-status-card')).toContainText('4/5');
+
+  // Cleanup: remove only the data this test created.
+  const day = await page.request.get(`/api/calendar?from=${today}&to=${today}`);
+  const dayBody = (await day.json()) as { plannedWorkouts: Array<{ id: string; title: string }> };
+  for (const workout of dayBody.plannedWorkouts) {
+    if (workout.title === 'E2E 闭环跑' || workout.title === 'E2E 闭环第二项') {
+      const deleted = await page.request.delete(`/api/planned-workouts/${workout.id}`);
+      expect(deleted.ok()).toBe(true);
+    }
+  }
+  const statusDeleted = await page.request.delete(`/api/daily-status/${today}`);
+  expect(statusDeleted.ok()).toBe(true);
+});

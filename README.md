@@ -71,7 +71,7 @@ The UI has Activity, Pending, and Import History views. Medium-confidence FIT ma
 - `/imports`: the complete M1.1 upload, pending-resolution, and history loop.
 - `/settings`: local athlete heart-rate and timezone settings used by deterministic analysis, plus the athlete profile editor (name, experience level, primary goal, weekly distance target in km, stored as meters).
 
-Complete samples remain in SQLite. Activity detail metadata does not return them; `/series` applies SQL range filtering and bounded deterministic downsampling. The daily-status REST API exists since M5 Batch 1, and its frontend entry point landed in M5 Batch 2; the Dashboard daily-status card and today's plan are still a later M5 batch.
+Complete samples remain in SQLite. Activity detail metadata does not return them; `/series` applies SQL range filtering and bounded deterministic downsampling. The M5 daily loop is complete end to end: record status, see today's plans and weekly distance on the Dashboard, and finish/link plans in the calendar — cross-page edits refresh immediately through the query cache.
 
 Charts render pace on a dedicated inverted `min/km` axis. Acceptance results, API changes, and manual verification steps are recorded in `docs/M2_ACCEPTANCE.md`.
 

@@ -16,6 +16,10 @@ export function ImportPanel() {
         queryClient.invalidateQueries({ queryKey: ['activities'] }),
         queryClient.invalidateQueries({ queryKey: ['activity'] }),
         queryClient.invalidateQueries({ queryKey: ['imports'] }),
+        // A new activity changes the Dashboard's recent stats and weekly
+        // distance; 'dashboard' is prefix-matched so all its windows refresh.
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['calendar-plan'] }),
       ]);
     },
   });

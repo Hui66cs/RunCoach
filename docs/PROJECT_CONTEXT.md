@@ -103,19 +103,22 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
   - `DELETE /api/daily-status/:localDate`：成功 204；不存在 404 `NOT_FOUND`；不触碰 activity、planned workout、source、sample、lap 或导入历史。
   - 性能与隔离：范围查询在 SQL 中按唯一 `local_date` 索引过滤，固定查询数、无 N+1、不读取 samples；Daily Status 不进入 canonical activity / immutable source 模型，不影响 `USER > FIT > PARROTAO > CSV` 字段优先级。
   - 本批不做：Daily Status 前端页面或表单（属于后续 Batch）、Dashboard 每日状态卡片、Dashboard 今日/近期计划、自动训练建议、readiness/recovery 评分、根据每日状态自动调整计划、医疗或受伤风险判断、自动关联计划与活动。
-- Batch 2 已实现（等待 reviewer 验收）：档案与每日状态的前端入口，不改动任何后端 contract。
+- Batch 2 已通过 reviewer 验收：档案与每日状态的前端入口，不改动任何后端 contract。
   - `/settings` 新增“运动员档案”区：编辑 名称 / 跑步经验（未设置、入门、有一定经验、进阶）/ 主要训练目标 / 每周跑量目标；km 输入、整数米存储（km×1000 四舍五入，上限 1000 km），空白提交 null 清空；档案保存使用独立 PATCH、只提交档案字段，不会覆盖心率/时区设置；加载中不渲染表单以免覆盖；成功/失败均有中文反馈，刷新后正确回填。
   - 新增 `/daily-status` 路由与主导航“状态”入口：页面定位为私人本地自报记录，不生成医疗结论、不决定是否训练。
   - 日期处理：默认日期 = athlete settings `timezoneOffsetMinutes` 的 canonical today（复用 `apps/web/src/local-date.ts`，settings 未加载时用浏览器 offset 作确定性 fallback）；合法 `?date=YYYY-MM-DD` 始终优先，缺失/非法才回退；日期输入 max 为 canonical today；提供“今天”按钮；URL 同步（settled 后单次 replace，无循环）；当前日期在页面可见位置显示。
   - 表单：五个 1–5 量表使用带可见方向说明的选项（睡眠质量 1 很差–5 很好、疲劳程度 1 很低–5 很高、肌肉酸痛 1 很轻–5 很明显、压力程度 1 很低–5 很高、训练意愿 1 很低–5 很强），键盘可操作、有可识别 label、不只靠颜色；静息心率可选 30–220 整数 bpm 并有前端校验；备注可选 ≤2000 字符并显示字数，空白语义与 shared schema 一致（规范化为 null）。
   - 读取/保存/删除：读取走 `GET /api/daily-status?from&to` 单日查询，query key 含日期，且只有响应的 `from` 等于当前日期才用于表单，切换日期不会串数据；保存走 `PUT /api/daily-status/:localDate`，全空表单被阻止并提示使用删除；删除走 `DELETE` 并使用 ConfirmDialog（明确只删该日期）；404 转为可读提示；成功后仅失效 `['daily-status']` 前缀缓存；含 loading/error/empty/saving/delete-confirm 状态；移动端无横向溢出。
   - 本批不做：Dashboard 每日状态卡片、今日计划、近期计划（属于后续 Batch）、readiness/recovery 评分、自动训练建议、医疗结论。
-- Batch 3 已实现（等待 reviewer 验收）：Dashboard 日常训练闭环整合，纯前端组合既有 API（dashboard、settings/athlete、daily-status、calendar），无新 endpoint、schema 或 contract 变化。
+- Batch 3 已通过 reviewer 验收：Dashboard 日常训练闭环整合，纯前端组合既有 API（dashboard、settings/athlete、daily-status、calendar），无新 endpoint、schema 或 contract 变化。
   - canonical today：整页以 `GET /api/dashboard` 返回的 `generatedForLocalDate` 为唯一“今天”，不使用浏览器本地日期；新增纯函数模块 `apps/web/src/dashboard-plan.ts`（含 Vitest 覆盖）。
   - 一次有界 Calendar 查询：`from = 当前自然周周一`、`to = max(周周日, today+7)`（≤14 个含端点日期），同时支撑今日计划、本周实际跑量与未来 7 天计划。
   - 卡片：个性化问候（你好，{displayName}，无姓名回退“概览”）+ 次要文本显示主要目标；今日状态（未记录 → “今天尚未记录状态” + 携带 canonical date 的记录入口；已记录 → 非空字段展示、null 显示“未填写”；请求失败仅卡片局部报错）；今日训练（当天全部计划：标题/类型/目标/完成状态 badge/关联活动链接；复杂修改留给日历页，“在日历中处理”链接到对应月份）；本周跑量（仅统计当前周一至周日内 `activityType === 'RUN'`、有效有限且 >0 的实际距离；有目标时显示实际/目标/百分比，文本可超 100% 但进度条宽度封顶 100%；未设置目标 → 前往设置，不自动生成）；近期计划（today 之后 7 个本地日内、仅 PLANNED、日期+标题+ID 确定性排序、最多 5 项，超出提供日历入口）。
   - 无实际活动时日常卡片仍然全部可见；既有 7/28 天统计、12 周趋势、导入引导与最近活动保持不变。
   - 不做：readiness/recovery 综合分、训练建议、医疗结论、自动计划调整。
+- Batch 4 已实现（等待 reviewer 验收）：日常闭环回归与阶段收口，仅修跨页面缓存刷新缺口并补闭环 E2E，不新增 endpoint/schema。
+  - 查询失效规则：Calendar 的 create/edit/delete/completion mutation 在原有 `['calendar']`、`['training-summary']` 之外，同步失效 `['calendar-plan']` 前缀（Dashboard 计划卡的查询键，按各自窗口键控）；CSV/FIT 导入与 pending resolve 在原有失效之外追加 `['dashboard']` 与 `['calendar-plan']`；DailyStatus 的 `['daily-status']` 与 Settings 的 `['settings']` 前缀本就覆盖 Dashboard 共享键，未改动。失败 mutation 不触发失效。
+  - 闭环 E2E（真实 UI/API）：从 Dashboard 读 canonical today → Calendar 默认日期为 canonical today 创建今日计划 → 记录今日状态 → CSV 导入当日合成 RUN 活动 → Calendar 人工关联并完成 → Dashboard 显示已完成 badge、关联活动链接、状态卡与本周跑量 → reload 后仍在；期间验证关联冲突 409 不伪装成功；测试结束仅清理自建数据。
 
 ### 冻结不做（跨里程碑有效）
 
