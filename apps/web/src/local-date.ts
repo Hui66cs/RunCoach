@@ -38,3 +38,31 @@ export function isValidLocalDate(value: string): boolean {
   const epochMs = Date.parse(`${value}T00:00:00Z`);
   return !Number.isNaN(epochMs) && new Date(epochMs).toISOString().slice(0, 10) === value;
 }
+
+/** Shifts a `YYYY-MM-DD` local date by whole days (UTC-based, DST-free). */
+export function addDays(localDate: string, days: number): string {
+  return new Date(Date.parse(`${localDate}T00:00:00Z`) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/** ISO weekday of a `YYYY-MM-DD` date: 1 = Monday … 7 = Sunday. */
+export function isoDayOfWeek(localDate: string): number {
+  const weekday = new Date(`${localDate}T00:00:00Z`).getUTCDay();
+  return weekday === 0 ? 7 : weekday;
+}
+
+/** Monday of the week containing `localDate` (weeks start on Monday). */
+export function mondayOfSameWeek(localDate: string): string {
+  return addDays(localDate, -(isoDayOfWeek(localDate) - 1));
+}
+
+/** Sunday of the week containing `localDate` (weeks start on Monday). */
+export function sundayOfSameWeek(localDate: string): string {
+  return addDays(mondayOfSameWeek(localDate), 6);
+}
+
+/** `YYYY-MM` part of a `YYYY-MM-DD` local date. */
+export function monthOf(localDate: string): string {
+  return localDate.slice(0, 7);
+}

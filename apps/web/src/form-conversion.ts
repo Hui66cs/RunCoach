@@ -100,6 +100,47 @@ const DAILY_STATUS_SCALE_FIELDS = [
 
 export type DailyStatusScaleField = (typeof DAILY_STATUS_SCALE_FIELDS)[number];
 
+export interface DailyStatusScaleMeta {
+  field: DailyStatusScaleField;
+  label: string;
+  description: string;
+  hints: [string, string, string, string, string];
+}
+
+/** The five 1–5 self-report scales with their visible direction labels. */
+export const dailyStatusScales: DailyStatusScaleMeta[] = [
+  {
+    field: 'sleepQuality',
+    label: '睡眠质量',
+    description: '1 很差，5 很好',
+    hints: ['很差', '较差', '一般', '较好', '很好'],
+  },
+  {
+    field: 'fatigueLevel',
+    label: '疲劳程度',
+    description: '1 很低，5 很高',
+    hints: ['很低', '较低', '一般', '较高', '很高'],
+  },
+  {
+    field: 'muscleSorenessLevel',
+    label: '肌肉酸痛',
+    description: '1 很轻，5 很明显',
+    hints: ['很轻', '较轻', '一般', '较明显', '很明显'],
+  },
+  {
+    field: 'stressLevel',
+    label: '压力程度',
+    description: '1 很低，5 很高',
+    hints: ['很低', '较低', '一般', '较高', '很高'],
+  },
+  {
+    field: 'motivationLevel',
+    label: '训练意愿',
+    description: '1 很低，5 很强',
+    hints: ['很低', '较低', '一般', '较强', '很强'],
+  },
+];
+
 export interface DailyStatusFormState {
   sleepQuality: string; // '' or '1'..'5'.
   fatigueLevel: string;

@@ -62,7 +62,7 @@ The UI has Activity, Pending, and Import History views. Medium-confidence FIT ma
 
 ## Application
 
-- `/`: Dashboard with 7/28-day summaries, a 12-week Monday-start volume trend, and recent activities.
+- `/`: Dashboard with the daily training loop — today's status, today's plans, weekly distance vs the profile target, upcoming plans — plus 7/28-day summaries, a 12-week Monday-start volume trend, and recent activities. Deterministic data only: no readiness scores, training advice, or medical conclusions.
 - `/activities`: paginated, filterable formal activity list.
 - `/activities/:activityId`: summary, native/derived splits, deterministic analysis, bounded interactive charts, offline route outline, and folded data provenance.
 - `/calendar`: monthly training calendar with planned workouts, completion status (待完成/已完成/已跳过/已逾期), manual plan-to-activity links, and monthly/weekly adherence.
@@ -77,6 +77,6 @@ Charts render pace on a dedicated inverted `min/km` axis. Acceptance results, AP
 
 ## Current limitations
 
-- No AI coach, automatic training suggestions, readiness/recovery scores, medical conclusions, ParroTao online sync, watch/Garmin Connect writes, authentication, backup/restore, online map, or cloud services. The Dashboard daily-status card, today's plan, and recent plans are planned for a later M5 batch.
+- No AI coach, automatic training suggestions, readiness/recovery scores, medical conclusions, ParroTao online sync, watch/Garmin Connect writes, authentication, backup/restore, online map, or cloud services.
 - A source system without an activity ID cannot distinguish two activities of the same type starting in the same UTC second. A collision within one CSV is rejected explicitly.
 - Distribution is not supported because the selected Garmin FIT SDK has license restrictions that require review before redistribution.

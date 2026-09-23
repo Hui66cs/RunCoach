@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addDays,
   browserOffsetMinutes,
   canonicalMonth,
   isOverdue,
+  isoDayOfWeek,
   isValidLocalDate,
   localDateFromEpoch,
+  monthOf,
+  mondayOfSameWeek,
+  sundayOfSameWeek,
 } from './local-date.js';
 
 describe('canonical local date from athlete timezone offset', () => {
@@ -62,5 +67,37 @@ describe('canonical local date from athlete timezone offset', () => {
     expect(isValidLocalDate('2026-13-01')).toBe(false);
     expect(isValidLocalDate('2026-9-1')).toBe(false);
     expect(isValidLocalDate('not-a-date')).toBe(false);
+  });
+
+  it('adds whole days on a UTC basis across month and year boundaries', () => {
+    expect(addDays('2026-09-22', 7)).toBe('2026-09-29');
+    expect(addDays('2026-09-30', 1)).toBe('2026-10-01'); // month boundary.
+    expect(addDays('2026-12-31', 1)).toBe('2027-01-01'); // year boundary.
+    expect(addDays('2026-09-22', -22)).toBe('2026-08-31'); // backwards.
+    expect(addDays('2026-03-01', -1)).toBe('2026-02-28'); // non-leap February.
+  });
+
+  it('finds the Monday of the week containing a date', () => {
+    expect(isoDayOfWeek('2026-09-21')).toBe(1); // Monday.
+    expect(mondayOfSameWeek('2026-09-21')).toBe('2026-09-21');
+    expect(isoDayOfWeek('2026-09-23')).toBe(3); // Wednesday.
+    expect(mondayOfSameWeek('2026-09-23')).toBe('2026-09-21');
+    expect(isoDayOfWeek('2026-09-27')).toBe(7); // Sunday.
+    expect(mondayOfSameWeek('2026-09-27')).toBe('2026-09-21');
+    // Year boundary: 2027-01-01 is a Friday in the week starting 2026-12-28.
+    expect(isoDayOfWeek('2027-01-01')).toBe(5);
+    expect(mondayOfSameWeek('2027-01-01')).toBe('2026-12-28');
+  });
+
+  it('finds the Sunday of the week containing a date', () => {
+    expect(sundayOfSameWeek('2026-09-21')).toBe('2026-09-27'); // Monday input.
+    expect(sundayOfSameWeek('2026-09-23')).toBe('2026-09-27'); // mid-week.
+    expect(sundayOfSameWeek('2026-09-27')).toBe('2026-09-27'); // Sunday input.
+    expect(sundayOfSameWeek('2027-01-01')).toBe('2027-01-03'); // year boundary.
+  });
+
+  it('extracts the month part of a local date', () => {
+    expect(monthOf('2026-09-23')).toBe('2026-09');
+    expect(monthOf('2027-01-01')).toBe('2027-01');
   });
 });

@@ -12,50 +12,10 @@ import { browserOffsetMinutes, isValidLocalDate, localDateFromEpoch } from '../l
 import {
   buildDailyStatusUpsert,
   dailyStatusFormState,
+  dailyStatusScales as scales,
   type DailyStatusFormState,
-  type DailyStatusScaleField,
 } from '../form-conversion.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
-
-interface ScaleConfig {
-  field: DailyStatusScaleField;
-  label: string;
-  description: string;
-  hints: [string, string, string, string, string];
-}
-
-const scales: ScaleConfig[] = [
-  {
-    field: 'sleepQuality',
-    label: '睡眠质量',
-    description: '1 很差，5 很好',
-    hints: ['很差', '较差', '一般', '较好', '很好'],
-  },
-  {
-    field: 'fatigueLevel',
-    label: '疲劳程度',
-    description: '1 很低，5 很高',
-    hints: ['很低', '较低', '一般', '较高', '很高'],
-  },
-  {
-    field: 'muscleSorenessLevel',
-    label: '肌肉酸痛',
-    description: '1 很轻，5 很明显',
-    hints: ['很轻', '较轻', '一般', '较明显', '很明显'],
-  },
-  {
-    field: 'stressLevel',
-    label: '压力程度',
-    description: '1 很低，5 很高',
-    hints: ['很低', '较低', '一般', '较高', '很高'],
-  },
-  {
-    field: 'motivationLevel',
-    label: '训练意愿',
-    description: '1 很低，5 很强',
-    hints: ['很低', '较低', '一般', '较强', '很强'],
-  },
-];
 
 const EMPTY_FORM_HINT = '请先填写至少一项内容；如需清空当天记录，请使用删除按钮。';
 

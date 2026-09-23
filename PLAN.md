@@ -44,10 +44,16 @@ Overall goal: complete the athlete profile and daily training context, then conn
    - `PUT /api/daily-status/:localDate`: atomic upsert keyed by the unique date (repeat submissions never create a second row); `createdAt` survives updates, `updatedAt` refreshes; absent fields keep their value, explicit `null` clears a field; at least one editable field required; unknown fields rejected; invalid date/body → `400 INVALID_DAILY_STATUS`.
    - `DELETE /api/daily-status/:localDate`: 204 on success, `404 NOT_FOUND` when missing; never touches activities, planned workouts, sources, samples, laps, or import history.
    - Range queries filter in SQL over the unique `local_date` index with a fixed query count (no N+1) and never read samples.
-2. [x] Batch 2: frontend entry points for the athlete profile and daily status — **implemented, awaiting reviewer acceptance**. Delivered:
+2. [x] Batch 2: frontend entry points for the athlete profile and daily status — **reviewer-accepted**. Delivered:
    - `/settings`: an athlete profile section editing `displayName`, `experienceLevel`, `primaryGoal`, and `weeklyDistanceTargetMeters` (km input, integer meters on the wire, blank sends null to clear). Profile saves PATCH profile fields only, so the existing heart-rate/timezone form and its data are never overwritten; loading never clobbers existing values; success/error feedback is in Chinese and fields refill after reload.
    - `/daily-status` route + 状态 navigation entry: date picker (valid `?date=YYYY-MM-DD` always wins; missing/invalid falls back to the athlete-timezone canonical today via `apps/web/src/local-date.ts`, browser-offset fallback while settings load, single URL replace; date input max = canonical today; 今天 button), five 1–5 scales with visible direction labels, resting heart rate 30–220 bpm with frontend validation, notes with char count (blank normalized to null by the shared schema), save/edit/delete through `GET/PUT/DELETE /api/daily-status` with the query cache keyed by date; loading/error/empty ("当天尚未记录")/saving/delete-confirm states; a fully empty form is blocked with guidance instead of creating an all-null row; date switching never leaks another date's data; mobile has no horizontal overflow.
    - Still not implemented (later M5 batch): Dashboard daily-status card, today's plan, and recent plans.
+3. [x] Batch 3: Dashboard 日常训练闭环整合 — **implemented, awaiting reviewer acceptance**. Delivered:
+   - Frontend composition of existing APIs only (`/api/dashboard`, `/api/settings/athlete`, `/api/daily-status`, `/api/calendar`); no new endpoint, schema, or contract change.
+   - Canonical today for the whole page is `dashboard.generatedForLocalDate`; a new pure module `apps/web/src/dashboard-plan.ts` derives the bounded calendar window (`from` = current week Monday, `to` = max(week Sunday, today + 7 days), ≤14 inclusive dates) and selects today's plans, upcoming plans (PLANNED only, next 7 local days excluding today, date/title/id order, max 5 with hasMore), and the week's positive finite RUN distance (planned targets never count). All helpers have Vitest coverage including Monday boundaries and year rollover.
+   - Dashboard cards: personalized greeting (你好，{displayName}，falls back to 概览) with the primary goal as secondary text; 今日状态 (today = canonical date, 未记录 → 记录今日状态 link carrying the date, recorded → non-null fields shown with nulls as 未填写, local error only in the card); 今日训练 (all of today's plans with title/type/target/status badge and linked-activity links; 在日历中处理 link to the month); 本周跑量 (actual vs profile target with percentage; the progress bar is capped at 100% while the text may exceed it; no target → settings link, never a generated one); 近期计划 (max 5 + 在日历中查看 when more, explicit empty state).
+   - All daily-loop cards remain visible with zero activities; the existing 7/28-day stats, 12-week trend, import guide, and recent activities are unchanged.
+   - Still not implemented: readiness/recovery scores, training advice, medical conclusions, automatic plan adjustments — permanently out of scope.
 
 M5 still excludes: readiness/recovery composite scores, training advice or automatic plan adjustments, medical or injury judgements, auto-linking plans to activities, and every item in the excluded list below.
 
@@ -101,7 +107,8 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M4 Batch 2: plan completion status, one-to-one manual activity links, adherence rate, weekly rollups, and E2E coverage (stage-accepted; M4 verdict PASS WITH FOLLOW-UP).
 - [x] M4 stage acceptance recorded (PASS WITH FOLLOW-UP); M5 approved as the current milestone.
 - [x] M5 Batch 1: athlete profile fields and daily status data/API foundation (reviewer-accepted).
-- [x] M5 Batch 2: `/settings` athlete profile form and `/daily-status` create/edit/delete page (implemented, awaiting reviewer acceptance; Dashboard integration belongs to a later M5 batch).
+- [x] M5 Batch 2: `/settings` athlete profile form and `/daily-status` create/edit/delete page (reviewer-accepted).
+- [x] M5 Batch 3: Dashboard daily-loop integration (implemented, awaiting reviewer acceptance).
 
 ## M2 implementation record
 

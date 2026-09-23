@@ -110,6 +110,12 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
   - 表单：五个 1–5 量表使用带可见方向说明的选项（睡眠质量 1 很差–5 很好、疲劳程度 1 很低–5 很高、肌肉酸痛 1 很轻–5 很明显、压力程度 1 很低–5 很高、训练意愿 1 很低–5 很强），键盘可操作、有可识别 label、不只靠颜色；静息心率可选 30–220 整数 bpm 并有前端校验；备注可选 ≤2000 字符并显示字数，空白语义与 shared schema 一致（规范化为 null）。
   - 读取/保存/删除：读取走 `GET /api/daily-status?from&to` 单日查询，query key 含日期，且只有响应的 `from` 等于当前日期才用于表单，切换日期不会串数据；保存走 `PUT /api/daily-status/:localDate`，全空表单被阻止并提示使用删除；删除走 `DELETE` 并使用 ConfirmDialog（明确只删该日期）；404 转为可读提示；成功后仅失效 `['daily-status']` 前缀缓存；含 loading/error/empty/saving/delete-confirm 状态；移动端无横向溢出。
   - 本批不做：Dashboard 每日状态卡片、今日计划、近期计划（属于后续 Batch）、readiness/recovery 评分、自动训练建议、医疗结论。
+- Batch 3 已实现（等待 reviewer 验收）：Dashboard 日常训练闭环整合，纯前端组合既有 API（dashboard、settings/athlete、daily-status、calendar），无新 endpoint、schema 或 contract 变化。
+  - canonical today：整页以 `GET /api/dashboard` 返回的 `generatedForLocalDate` 为唯一“今天”，不使用浏览器本地日期；新增纯函数模块 `apps/web/src/dashboard-plan.ts`（含 Vitest 覆盖）。
+  - 一次有界 Calendar 查询：`from = 当前自然周周一`、`to = max(周周日, today+7)`（≤14 个含端点日期），同时支撑今日计划、本周实际跑量与未来 7 天计划。
+  - 卡片：个性化问候（你好，{displayName}，无姓名回退“概览”）+ 次要文本显示主要目标；今日状态（未记录 → “今天尚未记录状态” + 携带 canonical date 的记录入口；已记录 → 非空字段展示、null 显示“未填写”；请求失败仅卡片局部报错）；今日训练（当天全部计划：标题/类型/目标/完成状态 badge/关联活动链接；复杂修改留给日历页，“在日历中处理”链接到对应月份）；本周跑量（仅统计当前周一至周日内 `activityType === 'RUN'`、有效有限且 >0 的实际距离；有目标时显示实际/目标/百分比，文本可超 100% 但进度条宽度封顶 100%；未设置目标 → 前往设置，不自动生成）；近期计划（today 之后 7 个本地日内、仅 PLANNED、日期+标题+ID 确定性排序、最多 5 项，超出提供日历入口）。
+  - 无实际活动时日常卡片仍然全部可见；既有 7/28 天统计、12 周趋势、导入引导与最近活动保持不变。
+  - 不做：readiness/recovery 综合分、训练建议、医疗结论、自动计划调整。
 
 ### 冻结不做（跨里程碑有效）
 
