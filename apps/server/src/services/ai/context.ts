@@ -6,9 +6,12 @@ import { addDays } from '../../dashboard-dates.js';
  * Builds the bounded AI training context from existing deterministic
  * aggregates (M6). Pure function: no I/O, no database access. The whitelist
  * is the exported schema — numeric run aggregates, Monday-start weekly
- * volumes intersecting the window, and plan completion counts. Activity
- * names, notes, heart rate, GPS, daily-status scales, and profile text are
- * structurally absent because the input types do not contain them.
+ * volumes fully contained in the window, and plan completion counts. A week
+ * that only partially intersects the window is dropped (not clipped), since
+ * its stored counts cover dates outside the window and no sent number may
+ * include out-of-window dates. Activity names, notes, heart rate, GPS,
+ * daily-status scales, and profile text are structurally absent because the
+ * input types do not contain them.
  */
 export function buildAiTrainingContext(params: {
   windowDays: 7 | 28;
@@ -20,8 +23,8 @@ export function buildAiTrainingContext(params: {
   const windowStartLocalDate = addDays(windowEndLocalDate, -(windowDays - 1));
   const weeklyVolumes = dashboard.weeklyVolumes.filter(
     (week) =>
-      week.weekEndLocalDate >= windowStartLocalDate &&
-      week.weekStartLocalDate <= windowEndLocalDate,
+      week.weekStartLocalDate >= windowStartLocalDate &&
+      week.weekEndLocalDate <= windowEndLocalDate,
   );
   return {
     generatedForLocalDate: dashboard.generatedForLocalDate,

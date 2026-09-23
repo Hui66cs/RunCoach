@@ -786,6 +786,8 @@ export type AiContextRunSummary = z.infer<typeof aiContextRunSummarySchema>;
  * The full field whitelist sent to the model. Every nested key is a numeric
  * aggregate or a local date — intentionally excluding activity names, notes,
  * heart rate, GPS coordinates, daily-status scales, and profile text.
+ * Weekly volumes are only included when the whole Monday-start week lies
+ * inside the window, so no sent number covers out-of-window dates.
  */
 export const aiTrainingContextSchema = z.object({
   generatedForLocalDate: z.iso.date(),
@@ -798,6 +800,17 @@ export const aiTrainingContextSchema = z.object({
   planSummary: trainingSummaryCountsSchema,
 });
 export type AiTrainingContext = z.infer<typeof aiTrainingContextSchema>;
+
+/**
+ * Read-only preview of exactly what a review request would send. Served
+ * without ever calling the model provider, so a future UI can show the
+ * context for confirmation before anything leaves the machine.
+ */
+export const aiContextPreviewResponseSchema = z.object({
+  context: aiTrainingContextSchema,
+  aiEnabled: z.boolean(),
+});
+export type AiContextPreviewResponse = z.infer<typeof aiContextPreviewResponseSchema>;
 
 export const aiReviewResponseSchema = z.object({
   context: aiTrainingContextSchema,

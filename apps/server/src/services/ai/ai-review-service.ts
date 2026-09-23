@@ -2,8 +2,10 @@ import {
   MAX_AI_REVIEW_CHARS,
   aiTrainingContextSchema,
   dashboardResponseSchema,
+  type AiContextPreviewResponse,
   type AiReviewRequest,
   type AiReviewResponse,
+  type AiTrainingContext,
 } from '@runcoach/shared';
 import type { ActivityRepository } from '../../repositories/activity-repository.js';
 import { localDateFromUtcTime } from '../../dashboard-dates.js';
@@ -57,28 +59,22 @@ export class AiReviewService {
     private readonly options: AiReviewServiceOptions,
   ) {}
 
+  /**
+   * Read-only preview of exactly what a review request would send. Never
+   * calls the provider — it works even while the integration is disabled, so
+   * a future UI can show the context ("先看发送内容") before any confirm
+   * step ("再确认") actually triggers the model call.
+   */
+  preview(request: AiReviewRequest, todayLocalDate?: string): AiContextPreviewResponse {
+    const context = this.buildContext(request, todayLocalDate);
+    return { context, aiEnabled: this.options.enabled };
+  }
+
   async review(request: AiReviewRequest, todayLocalDate?: string): Promise<AiReviewResponse> {
     if (!this.options.enabled) {
       throw new AiServiceError('AI_DISABLED', 'AI 回顾未启用');
     }
-    const settings = this.repository.getAthleteSettings();
-    const today =
-      todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);
-    // The same canonical today feeds every aggregate so the context window
-    // cannot drift between sources.
-    const dashboard = dashboardResponseSchema.parse(this.repository.getDashboard(today));
-    const startLocalDate = new Date(
-      Date.parse(`${today}T00:00:00Z`) - (request.windowDays - 1) * 86_400_000,
-    )
-      .toISOString()
-      .slice(0, 10);
-    const planSummary = this.repository.getTrainingSummary(
-      { from: startLocalDate, to: today },
-      today,
-    ).summary;
-    const context = aiTrainingContextSchema.parse(
-      buildAiTrainingContext({ windowDays: request.windowDays, dashboard, planSummary }),
-    );
+    const context = this.buildContext(request, todayLocalDate);
     const userPrompt = buildReviewUserPrompt(JSON.stringify(context));
 
     let completion;
@@ -109,5 +105,28 @@ export class AiReviewService {
       model: completion.model.slice(0, 100),
       generatedAt: new Date().toISOString(),
     };
+  }
+
+  /** Shared context assembly for preview and review: same canonical today,
+   * same aggregates, same whitelist. Provider is never touched here. */
+  private buildContext(request: AiReviewRequest, todayLocalDate?: string): AiTrainingContext {
+    const settings = this.repository.getAthleteSettings();
+    const today =
+      todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);
+    // The same canonical today feeds every aggregate so the context window
+    // cannot drift between sources.
+    const dashboard = dashboardResponseSchema.parse(this.repository.getDashboard(today));
+    const startLocalDate = new Date(
+      Date.parse(`${today}T00:00:00Z`) - (request.windowDays - 1) * 86_400_000,
+    )
+      .toISOString()
+      .slice(0, 10);
+    const planSummary = this.repository.getTrainingSummary(
+      { from: startLocalDate, to: today },
+      today,
+    ).summary;
+    return aiTrainingContextSchema.parse(
+      buildAiTrainingContext({ windowDays: request.windowDays, dashboard, planSummary }),
+    );
   }
 }

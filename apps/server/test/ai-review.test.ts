@@ -236,6 +236,67 @@ describe('AI review API (M6)', () => {
     expect(serialized).not.toContain('averageHeartRateBpm');
   });
 
+  it('previews the context without calling the provider, even while disabled', async () => {
+    const provider = new FakeProvider(() => {
+      throw new Error('provider must never be called by preview');
+    });
+    const previewHarness = await buildHarness((repository) =>
+      makeService(repository, provider, { enabled: false }),
+    );
+    createActivity(previewHarness.repository, previewHarness.fileStore, {
+      localDate: TODAY,
+      distanceMeters: 8000,
+      name: '机密活动名称',
+    });
+    const before = rowCounts(previewHarness);
+    const response = await previewHarness.app.inject({
+      method: 'POST',
+      url: '/api/ai/context',
+      payload: { windowDays: 28 },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ context: { running: { runs: number } }; aiEnabled: boolean }>();
+    expect(body.aiEnabled).toBe(false);
+    expect(body.context.running.runs).toBe(1);
+    expect(body.context.windowStartLocalDate).toBe('2026-08-27');
+    expect(provider.requests).toHaveLength(0);
+    expect(rowCounts(previewHarness)).toEqual(before);
+    await previewHarness.app.close();
+    previewHarness.database.close();
+    fs.rmSync(previewHarness.directory, { recursive: true, force: true });
+  });
+
+  it('previews the same context the review would send when enabled', async () => {
+    const provider = new FakeProvider(() => ({ text: '回顾', model: 'fake' }));
+    const enabledHarness = await buildHarness((repository) => makeService(repository, provider));
+    createActivity(enabledHarness.repository, enabledHarness.fileStore, { localDate: TODAY });
+    const preview = await enabledHarness.app.inject({
+      method: 'POST',
+      url: '/api/ai/context',
+      payload: { windowDays: 7 },
+    });
+    expect(preview.statusCode).toBe(200);
+    const previewBody = preview.json<{
+      context: { running: { runs: number } };
+      aiEnabled: boolean;
+    }>();
+    expect(previewBody.aiEnabled).toBe(true);
+    expect(provider.requests).toHaveLength(0);
+
+    const review = await enabledHarness.app.inject({
+      method: 'POST',
+      url: '/api/ai/review',
+      payload: { windowDays: 7 },
+    });
+    expect(review.statusCode).toBe(200);
+    const reviewBody = review.json<{ context: { running: { runs: number } } }>();
+    expect(reviewBody.context).toEqual(previewBody.context);
+    expect(provider.requests).toHaveLength(1);
+    await enabledHarness.app.close();
+    enabledHarness.database.close();
+    fs.rmSync(enabledHarness.directory, { recursive: true, force: true });
+  });
+
   it('applies inclusive 7-day boundaries', async () => {
     const provider = new FakeProvider(() => ({ text: '回顾', model: 'fake' }));
     harness = await buildHarness((repository) => makeService(repository, provider));

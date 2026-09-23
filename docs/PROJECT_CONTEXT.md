@@ -95,12 +95,12 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
 
 - M5 阶段收口：Batch 1–4 全部通过 reviewer 验收，M5 阶段完成。
 - M6 Batch 1 已实现（等待 reviewer 验收）：
-  - `AiTrainingContext`（shared Zod schema）字段白名单：canonical `generatedForLocalDate`/`timezoneOffsetMinutes`、`windowDays`（7 或 28）、闭区间 `windowStartLocalDate`/`windowEndLocalDate`、对应窗口的 dashboard 7/28 天跑步汇总（次数、总距离、总移动时长、平均配速）、与窗口相交的周一起始周汇总（≤5 个）、training-summary 计数。结构性排除：原始导入、samples、GPS、心率、每日状态量表、活动名称、自由文本备注、档案文本、任何密钥。
+  - `AiTrainingContext`（shared Zod schema）字段白名单：canonical `generatedForLocalDate`/`timezoneOffsetMinutes`、`windowDays`（7 或 28）、闭区间 `windowStartLocalDate`/`windowEndLocalDate`、对应窗口的 dashboard 7/28 天跑步汇总（次数、总距离、总移动时长、平均配速）、**完整落在窗口内**的周一起始周汇总（与窗口仅部分相交的边界周直接丢弃而非裁剪，保证任何发送数值都不含窗口外日期）、training-summary 计数。结构性排除：原始导入、samples、GPS、每日状态量表、活动名称、自由文本备注、档案文本、任何密钥；注意跑步数据本身可能被视为健康相关信息，是否发送由用户自行判断。
+  - `POST /api/ai/context`：只读预览端点，返回 `aiContextPreviewResponseSchema`（`context`、`aiEnabled`）；与 review 走同一构建路径但**绝不调用 provider**，且在 AI 未启用时仍可访问，供后续 UI 实现“先预览发送内容，再确认调用”。
   - `POST /api/ai/review`：仅由用户主动触发；请求体 `aiReviewRequestSchema`（`windowDays: 7|28`，默认 28）；响应 `aiReviewResponseSchema`（context、review 1–4000 字符、model ≤100 字符、generatedAt）。上下文由 `getDashboard(today)` 与 `getTrainingSummary` 用同一 canonical today 组装；prompt 仅由上下文 JSON 服务端拼装。
-  - Provider 接口 `TrainingReviewProvider`（`apps/server/src/services/ai/provider.ts`，可注入测试替身）+ `DeepSeekReviewProvider` chat-completions adapter：AbortController 超时、上游响应在边界用 Zod 解析、API key 只出现在 Authorization 头，绝不进入前端、日志或 Git。
-  - 配置：`RUNCOACH_AI_ENABLED` + `RUNCOACH_AI_PROVIDER=deepseek` + `RUNCOACH_DEEPSEEK_API_KEY` 三者同时满足才启用真实调用，默认禁用；`.env.example` 注明 DeepSeek 条款允许在去标识化前提下将输入输出用于模型优化，开启属用户知情决定。
+  - Provider 接口 `TrainingReviewProvider`（`apps/server/src/services/ai/provider.ts`，可注入测试替身）+ `DeepSeekReviewProvider` chat-completions adapter（模型 `deepseek-flash`，已对照官方 Chat Completions 文档核对 endpoint 与 `max_tokens` 参数）：AbortController 超时、上游响应在边界用 Zod 解析、API key 只出现在 Authorization 头，绝不进入前端、日志或 Git。
+  - 配置：`RUNCOACH_AI_ENABLED` + `RUNCOACH_AI_PROVIDER=deepseek` + 非空 `RUNCOACH_DEEPSEEK_API_KEY` 三者同时满足才启用真实调用，默认禁用；空/空白 key 视为未配置，不会阻止服务启动。`.env.example` 注明 DeepSeek 条款允许在去标识化前提下将输入输出用于模型优化、服务端启用开关不等于用户已完成发送前确认，且跑步数据可能被视为健康相关信息。
   - 稳定且脱敏的错误：503 `AI_DISABLED`、400 `INVALID_AI_REVIEW_REQUEST`、504 `AI_TIMEOUT`、429 `AI_RATE_LIMITED`、502 `AI_PROVIDER_ERROR`/`AI_EMPTY_RESPONSE`/`AI_INVALID_OUTPUT`；上游响应体、key、本地路径不出现在任何客户端消息中；任何失败路径都不写 SQLite；不新增聊天记录表。
-  - DeepSeek 条款核对结论：白名单字段均为数值聚合，不含个人标识、健康数据、位置或自由文本，适合其 API；条款中的去标识化训练条款通过“默认禁用 + 显式 opt-in”处理，未因此扩大数据范围。
   - 本批不做：前端回顾 UI（后续 Batch 需另行批准）、更多 LLM provider、聊天/记忆功能、自动发送、AI 计划生成。
 
 - Batch 1 已通过 reviewer 验收：运动员档案字段与每日状态的数据/API 基础，本批不含任何前端。

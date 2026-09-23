@@ -142,27 +142,60 @@ describe('AI training context whitelist and date boundaries', () => {
     expect(twentyEight.running.runs).toBe(12);
   });
 
-  it('includes only weekly volumes intersecting the window', () => {
+  it('includes only weekly volumes fully contained in the window', () => {
     const seven = buildAiTrainingContext({
       windowDays: 7,
       dashboard: makeDashboard(),
       planSummary: makePlanSummary(),
     });
-    // 7-day window 2026-09-17..09-23 intersects only the 09-14 and 09-21 weeks.
-    expect(seven.weeklyVolumes.map((week) => week.weekStartLocalDate)).toEqual([
-      '2026-09-14',
-      '2026-09-21',
-    ]);
+    // 7-day window 2026-09-17..09-23 only partially covers the 09-14 and
+    // 09-21 weeks, so both are dropped rather than sent with out-of-window
+    // dates included in their counts.
+    expect(seven.weeklyVolumes).toEqual([]);
     const twentyEight = buildAiTrainingContext({
       windowDays: 28,
       dashboard: makeDashboard(),
       planSummary: makePlanSummary(),
     });
-    // 28-day window 2026-08-27..09-23 excludes the future 09-28 week.
-    expect(
-      twentyEight.weeklyVolumes.every((week) => week.weekStartLocalDate !== '2026-09-28'),
-    ).toBe(true);
-    expect(twentyEight.weeklyVolumes.length).toBeLessThanOrEqual(5);
+    // 28-day window 2026-08-27..09-23 fully contains the 08-31, 09-07 and
+    // 09-14 weeks; the boundary weeks 08-24.. (partially before) and
+    // 09-21..09-27 (partially after) and the future 09-28 week are excluded.
+    expect(twentyEight.weeklyVolumes.map((week) => week.weekStartLocalDate)).toEqual([
+      '2026-08-31',
+      '2026-09-07',
+      '2026-09-14',
+    ]);
+  });
+
+  it('keeps a weekly volume whose whole week lies inside the window (boundary regression)', () => {
+    // Sunday: the 7-day rolling window 09-21..09-27 is exactly the Monday
+    // week, so its volume may be sent as-is.
+    const dashboard = makeDashboard({ generatedForLocalDate: '2026-09-27' });
+    const context = buildAiTrainingContext({
+      windowDays: 7,
+      dashboard,
+      planSummary: makePlanSummary(),
+    });
+    expect(context.weeklyVolumes.map((week) => week.weekStartLocalDate)).toEqual(['2026-09-21']);
+    // Every sent weekly volume lies inside the window by construction.
+    for (const week of context.weeklyVolumes) {
+      expect(week.weekStartLocalDate >= context.windowStartLocalDate).toBe(true);
+      expect(week.weekEndLocalDate <= context.windowEndLocalDate).toBe(true);
+    }
+  });
+
+  it('drops the first boundary week when the window starts mid-week (boundary regression)', () => {
+    // 28-day window 2026-08-27..09-23 starts mid-week (08-24 Monday week) —
+    // that week's stored counts cover 08-24..08-26 which are outside the
+    // window, so it must never be sent.
+    const context = buildAiTrainingContext({
+      windowDays: 28,
+      dashboard: makeDashboard(),
+      planSummary: makePlanSummary(),
+    });
+    expect(context.weeklyVolumes.every((week) => week.weekStartLocalDate !== '2026-08-24')).toBe(
+      true,
+    );
   });
 
   it('serializes only whitelisted numeric and date fields (no forbidden content)', () => {
@@ -223,7 +256,7 @@ describe('DeepSeek review provider adapter', () => {
   const options = {
     apiKey: 'sk-test-secret',
     baseUrl: 'https://api.example.com',
-    model: 'deepseek-chat',
+    model: 'deepseek-flash',
   };
 
   function makeFetch(handler: (request: Request) => Response | Promise<Response>): typeof fetch {
@@ -234,7 +267,7 @@ describe('DeepSeek review provider adapter', () => {
   }
 
   const successBody = {
-    model: 'deepseek-chat',
+    model: 'deepseek-flash',
     choices: [{ message: { content: '  最近四周训练量稳定上升，注意恢复。 ' } }],
   };
 
@@ -263,12 +296,12 @@ describe('DeepSeek review provider adapter', () => {
       stream: boolean;
       messages: Array<{ role: string; content: string }>;
     };
-    expect(sent.model).toBe('deepseek-chat');
+    expect(sent.model).toBe('deepseek-flash');
     expect(sent.max_tokens).toBe(512);
     expect(sent.stream).toBe(false);
     expect(sent.messages).toHaveLength(2);
     expect(result.text).toBe('最近四周训练量稳定上升，注意恢复。');
-    expect(result.model).toBe('deepseek-chat');
+    expect(result.model).toBe('deepseek-flash');
   });
 
   it('maps 429 to RATE_LIMITED', async () => {
@@ -325,7 +358,7 @@ describe('DeepSeek review provider adapter', () => {
       fetchImpl: makeFetch(
         () =>
           new Response(
-            JSON.stringify({ model: 'deepseek-chat', choices: [{ message: { content: '   ' } }] }),
+            JSON.stringify({ model: 'deepseek-flash', choices: [{ message: { content: '   ' } }] }),
             {
               status: 200,
             },

@@ -27,7 +27,7 @@ const aiProvider: TrainingReviewProvider =
     ? new DeepSeekReviewProvider({
         apiKey: config.ai.deepSeek.apiKey,
         baseUrl: config.ai.deepSeek.baseUrl,
-        model: 'deepseek-chat',
+        model: 'deepseek-flash',
       })
     : unreachableProvider;
 const aiReview = new AiReviewService(repository, {

@@ -21,10 +21,15 @@ const configSchema = z.object({
     .positive()
     .default(50 * 1024 * 1024),
   // AI review (M6): disabled by default; the API key never leaves the server
-  // process and must not be committed or logged.
+  // process and must not be committed or logged. An empty (or blank) key is
+  // treated as absent so the example .env keeps the server startable while AI
+  // stays disabled.
   RUNCOACH_AI_ENABLED: booleanFlagSchema,
   RUNCOACH_AI_PROVIDER: z.enum(['none', 'deepseek']).default('none'),
-  RUNCOACH_DEEPSEEK_API_KEY: z.string().min(1).optional(),
+  RUNCOACH_DEEPSEEK_API_KEY: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().min(1).optional(),
+  ),
   RUNCOACH_DEEPSEEK_BASE_URL: z.string().url().default('https://api.deepseek.com'),
   RUNCOACH_AI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(20_000),
   RUNCOACH_AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(64).max(2048).default(512),

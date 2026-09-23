@@ -6,6 +6,7 @@ import {
   activityListQuerySchema,
   activityPatchSchema,
   activitySeriesQuerySchema,
+  aiContextPreviewResponseSchema,
   aiReviewRequestSchema,
   aiReviewResponseSchema,
   athleteSettingsPatchSchema,
@@ -205,6 +206,23 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const deleted = dependencies.repository.deletePlannedWorkout(params.data.workoutId);
     if (!deleted) return reply.code(404).send({ code: 'NOT_FOUND', message: '计划训练不存在' });
     return reply.code(204).send();
+  });
+
+  // Read-only preview of exactly what a review request would send; never
+  // calls the provider and works even while the integration is disabled, so
+  // a future UI can show the context before any confirm step.
+  app.post('/api/ai/context', async (request, reply) => {
+    const service = dependencies.aiReview;
+    if (service === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    const body = aiReviewRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply
+        .code(400)
+        .send({ code: 'INVALID_AI_REVIEW_REQUEST', message: 'AI 回顾请求无效' });
+    }
+    return aiContextPreviewResponseSchema.parse(service.preview(body.data));
   });
 
   app.post('/api/ai/review', async (request, reply) => {
