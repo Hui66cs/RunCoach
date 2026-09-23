@@ -768,8 +768,26 @@ export const MAX_AI_REVIEW_CHARS = 4000;
 export const aiReviewWindowDaysSchema = z.union([z.literal(7), z.literal(28)]);
 export type AiReviewWindowDays = z.infer<typeof aiReviewWindowDaysSchema>;
 
+/**
+ * Bounded fingerprint (SHA-256 hex) of the exact context a preview returned.
+ * The review request must carry the fingerprint of the preview the user
+ * confirmed; the server recomputes it and rejects the request when data or
+ * the canonical today changed in between, so a changed context is never
+ * silently sent. No long-lived authorization state is stored anywhere.
+ */
+export const aiContextFingerprintSchema = z.string().regex(/^[0-9a-f]{64}$/);
+export type AiContextFingerprint = z.infer<typeof aiContextFingerprintSchema>;
+
+/** Body for the read-only context preview (no fingerprint required). */
+export const aiContextPreviewRequestSchema = z.strictObject({
+  windowDays: aiReviewWindowDaysSchema.default(28),
+});
+export type AiContextPreviewRequest = z.infer<typeof aiContextPreviewRequestSchema>;
+
+/** Body for a confirmed review: must echo the preview's fingerprint. */
 export const aiReviewRequestSchema = z.strictObject({
   windowDays: aiReviewWindowDaysSchema.default(28),
+  contextFingerprint: aiContextFingerprintSchema,
 });
 export type AiReviewRequest = z.infer<typeof aiReviewRequestSchema>;
 
@@ -803,12 +821,14 @@ export type AiTrainingContext = z.infer<typeof aiTrainingContextSchema>;
 
 /**
  * Read-only preview of exactly what a review request would send. Served
- * without ever calling the model provider, so a future UI can show the
- * context for confirmation before anything leaves the machine.
+ * without ever calling the model provider, so the UI can show the context
+ * for confirmation before anything leaves the machine; the fingerprint must
+ * be echoed back by the confirmed review request.
  */
 export const aiContextPreviewResponseSchema = z.object({
   context: aiTrainingContextSchema,
   aiEnabled: z.boolean(),
+  contextFingerprint: aiContextFingerprintSchema,
 });
 export type AiContextPreviewResponse = z.infer<typeof aiContextPreviewResponseSchema>;
 

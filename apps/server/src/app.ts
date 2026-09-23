@@ -6,6 +6,7 @@ import {
   activityListQuerySchema,
   activityPatchSchema,
   activitySeriesQuerySchema,
+  aiContextPreviewRequestSchema,
   aiContextPreviewResponseSchema,
   aiReviewRequestSchema,
   aiReviewResponseSchema,
@@ -45,6 +46,7 @@ interface AppDependencies {
 
 const aiServiceErrorStatus: Record<string, number> = {
   AI_DISABLED: 503,
+  AI_CONTEXT_STALE: 409,
   AI_TIMEOUT: 504,
   AI_RATE_LIMITED: 429,
   AI_PROVIDER_ERROR: 502,
@@ -216,7 +218,7 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     if (service === undefined) {
       return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
     }
-    const body = aiReviewRequestSchema.safeParse(request.body ?? {});
+    const body = aiContextPreviewRequestSchema.safeParse(request.body ?? {});
     if (!body.success) {
       return reply
         .code(400)

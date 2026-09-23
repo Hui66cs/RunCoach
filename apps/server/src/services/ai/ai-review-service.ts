@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import {
   MAX_AI_REVIEW_CHARS,
   aiTrainingContextSchema,
   dashboardResponseSchema,
+  type AiContextPreviewRequest,
   type AiContextPreviewResponse,
   type AiReviewRequest,
   type AiReviewResponse,
@@ -40,6 +42,11 @@ export function buildReviewUserPrompt(contextJson: string): string {
   ].join('\n');
 }
 
+/** Bounded fingerprint of the exact context (SHA-256 of its stable JSON). */
+export function contextFingerprint(context: AiTrainingContext): string {
+  return createHash('sha256').update(JSON.stringify(context)).digest('hex');
+}
+
 export interface AiReviewServiceOptions {
   enabled: boolean;
   provider: TrainingReviewProvider;
@@ -65,9 +72,13 @@ export class AiReviewService {
    * a future UI can show the context ("先看发送内容") before any confirm
    * step ("再确认") actually triggers the model call.
    */
-  preview(request: AiReviewRequest, todayLocalDate?: string): AiContextPreviewResponse {
+  preview(request: AiContextPreviewRequest, todayLocalDate?: string): AiContextPreviewResponse {
     const context = this.buildContext(request, todayLocalDate);
-    return { context, aiEnabled: this.options.enabled };
+    return {
+      context,
+      aiEnabled: this.options.enabled,
+      contextFingerprint: contextFingerprint(context),
+    };
   }
 
   async review(request: AiReviewRequest, todayLocalDate?: string): Promise<AiReviewResponse> {
@@ -75,6 +86,13 @@ export class AiReviewService {
       throw new AiServiceError('AI_DISABLED', 'AI 回顾未启用');
     }
     const context = this.buildContext(request, todayLocalDate);
+    // Server-side fingerprint comparison: when data or the canonical today
+    // changed since the confirmed preview, the request is rejected before
+    // the provider is called — a changed context is never silently sent.
+    const expected = contextFingerprint(context);
+    if (request.contextFingerprint !== expected) {
+      throw new AiServiceError('AI_CONTEXT_STALE', '训练上下文已变化，请重新预览并确认');
+    }
     const userPrompt = buildReviewUserPrompt(JSON.stringify(context));
 
     let completion;
@@ -109,7 +127,10 @@ export class AiReviewService {
 
   /** Shared context assembly for preview and review: same canonical today,
    * same aggregates, same whitelist. Provider is never touched here. */
-  private buildContext(request: AiReviewRequest, todayLocalDate?: string): AiTrainingContext {
+  private buildContext(
+    request: AiContextPreviewRequest,
+    todayLocalDate?: string,
+  ): AiTrainingContext {
     const settings = this.repository.getAthleteSettings();
     const today =
       todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);

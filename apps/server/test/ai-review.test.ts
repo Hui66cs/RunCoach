@@ -154,6 +154,29 @@ function rowCounts(harness: Harness): Record<string, number> {
 describe('AI review API (M6)', () => {
   let harness: Harness | undefined;
 
+  /** Preview-then-confirm flow: returns the fingerprint along with the
+   * review response so tests exercise the real client contract. */
+  async function confirmReview(
+    target: Harness,
+    windowDays: number,
+    fingerprintOverride?: string,
+  ): Promise<{ review: Awaited<ReturnType<FastifyInstance['inject']>>; fingerprint: string }> {
+    const preview = await target.app.inject({
+      method: 'POST',
+      url: '/api/ai/context',
+      payload: { windowDays },
+    });
+    expect(preview.statusCode).toBe(200);
+    const previewBody = preview.json<{ contextFingerprint: string }>();
+    const fingerprint = fingerprintOverride ?? previewBody.contextFingerprint;
+    const review = await target.app.inject({
+      method: 'POST',
+      url: '/api/ai/review',
+      payload: { windowDays, contextFingerprint: fingerprint },
+    });
+    return { review, fingerprint };
+  }
+
   afterEach(async () => {
     if (harness !== undefined) {
       await harness.app.close();
@@ -207,13 +230,9 @@ describe('AI review API (M6)', () => {
       workoutType: 'EASY_RUN',
       title: '今日轻松跑',
     });
-    const response = await harness.app.inject({
-      method: 'POST',
-      url: '/api/ai/review',
-      payload: { windowDays: 28 },
-    });
-    expect(response.statusCode).toBe(200);
-    const body = response.json<AiReviewResponse>();
+    const response = await confirmReview(harness, 28);
+    expect(response.review.statusCode).toBe(200);
+    const body = response.review.json<AiReviewResponse>();
     expect(body.review).toBe('近四周训练量稳定，建议保持。');
     expect(body.model).toBe('fake-model');
     expect(body.context.generatedForLocalDate).toBe(TODAY);
@@ -230,7 +249,7 @@ describe('AI review API (M6)', () => {
     expect(prompt).not.toContain('私密训练备注');
     expect(prompt).not.toContain('今日轻松跑');
     // The response itself carries no forbidden fields either.
-    const serialized = response.body;
+    const serialized = response.review.body;
     expect(serialized).not.toContain('机密活动名称');
     expect(serialized).not.toContain('私密训练备注');
     expect(serialized).not.toContain('averageHeartRateBpm');
@@ -283,13 +302,9 @@ describe('AI review API (M6)', () => {
     expect(previewBody.aiEnabled).toBe(true);
     expect(provider.requests).toHaveLength(0);
 
-    const review = await enabledHarness.app.inject({
-      method: 'POST',
-      url: '/api/ai/review',
-      payload: { windowDays: 7 },
-    });
-    expect(review.statusCode).toBe(200);
-    const reviewBody = review.json<{ context: { running: { runs: number } } }>();
+    const confirmed = await confirmReview(enabledHarness, 7);
+    expect(confirmed.review.statusCode).toBe(200);
+    const reviewBody = confirmed.review.json<{ context: { running: { runs: number } } }>();
     expect(reviewBody.context).toEqual(previewBody.context);
     expect(provider.requests).toHaveLength(1);
     await enabledHarness.app.close();
@@ -308,16 +323,54 @@ describe('AI review API (M6)', () => {
       localDate: '2026-09-16',
       distanceMeters: 4000,
     }); // today-7, outside
+    const response = await confirmReview(harness, 7);
+    expect(response.review.statusCode).toBe(200);
+    const body = response.review.json<AiReviewResponse>();
+    expect(body.context.windowStartLocalDate).toBe('2026-09-17');
+    expect(body.context.running.runs).toBe(1);
+    expect(body.context.running.totalDistanceMeters).toBe(4000);
+  });
+
+  it('rejects a review without the confirmed fingerprint with 400', async () => {
+    const provider = new FakeProvider(() => ({ text: '回顾', model: 'fake' }));
+    harness = await buildHarness((repository) => makeService(repository, provider));
     const response = await harness.app.inject({
       method: 'POST',
       url: '/api/ai/review',
       payload: { windowDays: 7 },
     });
-    expect(response.statusCode).toBe(200);
-    const body = response.json<AiReviewResponse>();
-    expect(body.context.windowStartLocalDate).toBe('2026-09-17');
-    expect(body.context.running.runs).toBe(1);
-    expect(body.context.running.totalDistanceMeters).toBe(4000);
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'INVALID_AI_REVIEW_REQUEST' });
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  it('rejects a stale fingerprint with 409 and never calls the provider', async () => {
+    const provider = new FakeProvider(() => ({ text: '回顾', model: 'fake' }));
+    harness = await buildHarness((repository) => makeService(repository, provider));
+    createActivity(harness.repository, harness.fileStore, {
+      localDate: TODAY,
+      distanceMeters: 3000,
+    });
+    const preview = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/context',
+      payload: { windowDays: 7 },
+    });
+    const staleFingerprint = preview.json<{ contextFingerprint: string }>().contextFingerprint;
+    // The data changes after the preview: a new activity lands inside the
+    // window, so the confirmed context no longer matches.
+    createActivity(harness.repository, harness.fileStore, {
+      localDate: TODAY,
+      distanceMeters: 2000,
+    });
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/review',
+      payload: { windowDays: 7, contextFingerprint: staleFingerprint },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'AI_CONTEXT_STALE' });
+    expect(provider.requests).toHaveLength(0);
   });
 
   it('maps provider failures to stable sanitized codes', async () => {
@@ -344,13 +397,9 @@ describe('AI review API (M6)', () => {
         throw failure.error;
       });
       const current = await buildHarness((repository) => makeService(repository, provider));
-      const response = await current.app.inject({
-        method: 'POST',
-        url: '/api/ai/review',
-        payload: { windowDays: 7 },
-      });
-      expect(response.statusCode, failure.code).toBe(failure.status);
-      expect(response.json()).toMatchObject({ code: failure.code });
+      const { review } = await confirmReview(current, 7);
+      expect(review.statusCode, failure.code).toBe(failure.status);
+      expect(review.json()).toMatchObject({ code: failure.code });
       await current.app.close();
       current.database.close();
       fs.rmSync(current.directory, { recursive: true, force: true });
@@ -360,13 +409,9 @@ describe('AI review API (M6)', () => {
   it('rejects an empty model answer and an oversized answer', async () => {
     const emptyProvider = new FakeProvider(() => ({ text: '   ', model: 'fake' }));
     const emptyHarness = await buildHarness((repository) => makeService(repository, emptyProvider));
-    const emptyResponse = await emptyHarness.app.inject({
-      method: 'POST',
-      url: '/api/ai/review',
-      payload: {},
-    });
-    expect(emptyResponse.statusCode).toBe(502);
-    expect(emptyResponse.json()).toMatchObject({ code: 'AI_EMPTY_RESPONSE' });
+    const emptyResponse = await confirmReview(emptyHarness, 28);
+    expect(emptyResponse.review.statusCode).toBe(502);
+    expect(emptyResponse.review.json()).toMatchObject({ code: 'AI_EMPTY_RESPONSE' });
     await emptyHarness.app.close();
     emptyHarness.database.close();
     fs.rmSync(emptyHarness.directory, { recursive: true, force: true });
@@ -378,13 +423,9 @@ describe('AI review API (M6)', () => {
     const oversizeHarness = await buildHarness((repository) =>
       makeService(repository, oversizeProvider),
     );
-    const oversizeResponse = await oversizeHarness.app.inject({
-      method: 'POST',
-      url: '/api/ai/review',
-      payload: {},
-    });
-    expect(oversizeResponse.statusCode).toBe(502);
-    expect(oversizeResponse.json()).toMatchObject({ code: 'AI_INVALID_OUTPUT' });
+    const oversizeResponse = await confirmReview(oversizeHarness, 28);
+    expect(oversizeResponse.review.statusCode).toBe(502);
+    expect(oversizeResponse.review.json()).toMatchObject({ code: 'AI_INVALID_OUTPUT' });
     await oversizeHarness.app.close();
     oversizeHarness.database.close();
     fs.rmSync(oversizeHarness.directory, { recursive: true, force: true });
@@ -396,12 +437,8 @@ describe('AI review API (M6)', () => {
     createActivity(harness.repository, harness.fileStore, { localDate: TODAY });
     const before = rowCounts(harness);
 
-    const success = await harness.app.inject({
-      method: 'POST',
-      url: '/api/ai/review',
-      payload: {},
-    });
-    expect(success.statusCode).toBe(200);
+    const success = await confirmReview(harness, 28);
+    expect(success.review.statusCode).toBe(200);
     expect(rowCounts(harness)).toEqual(before);
 
     const failingProvider = new FakeProvider(() => {
@@ -428,8 +465,8 @@ describe('AI review API (M6)', () => {
       importService: new ImportService(harness.repository, harness.fileStore, DEFAULT_OFFSET),
       aiReview: failingService,
     });
-    const failure = await failingApp.inject({ method: 'POST', url: '/api/ai/review', payload: {} });
-    expect(failure.statusCode).toBe(504);
+    const failure = await confirmReview({ ...harness, app: failingApp }, 28);
+    expect(failure.review.statusCode).toBe(504);
     expect(rowCounts(harness)).toEqual(before);
     await failingApp.close();
   });

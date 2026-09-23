@@ -19,7 +19,13 @@ M6 (approved): bounded training context and a server-side, read-only DeepSeek re
    - `TrainingReviewProvider` interface (`apps/server/src/services/ai/provider.ts`) with the `DeepSeekReviewProvider` chat-completions adapter (model `deepseek-flash`, verified against the official Chat Completions docs: `POST {baseUrl}/chat/completions`, `max_tokens` supported): timeout via AbortController, Zod-parsed upstream responses at the boundary, the API key used only in the Authorization header (never logged, never sent to the frontend, never committed).
    - Config (`RUNCOACH_AI_ENABLED`/`RUNCOACH_AI_PROVIDER`/`RUNCOACH_DEEPSEEK_API_KEY`/`RUNCOACH_DEEPSEEK_BASE_URL`/`RUNCOACH_AI_TIMEOUT_MS`/`RUNCOACH_AI_MAX_OUTPUT_TOKENS`): real calls require the explicit flag, the deepseek provider, and a non-empty key — a blank key is treated as absent and never blocks startup; disabled by default. `.env.example` documents that DeepSeek's terms permit de-identified use of inputs for model improvement, that the enable switch only permits calls (it is not the user's per-send confirmation), and that running aggregates may be regarded as health-related data.
    - Stable sanitized errors: 503 `AI_DISABLED`, 400 `INVALID_AI_REVIEW_REQUEST`, 504 `AI_TIMEOUT`, 429 `AI_RATE_LIMITED`, 502 `AI_PROVIDER_ERROR`/`AI_EMPTY_RESPONSE`/`AI_INVALID_OUTPUT`; no upstream body, key, or path ever reaches a client message; no code path writes to SQLite; no chat history table.
-2. [ ] Batch 2+ (not started, not designed): any frontend review UI, additional providers, or richer context must be approved separately.
+2. [x] Batch 2: 训练回顾页面与发送前确认。**Implemented, awaiting reviewer acceptance.** Delivered:
+   - `/review` route + 回顾 navigation entry: window selector (7/28 days) fetches **only** the read-only preview (`POST /api/ai/context`) — entering, switching, or refreshing never calls `/api/ai/review`; the preview shows the exact date range, every field that will be sent, and a “数据将发送到 DeepSeek 云端” notice including the terms caveat and that running aggregates may be sensitive. Loading/empty/error/AI-disabled/pending/success/retry states are all explicit; small screens stay single-column.
+   - Per-send confirmation: the confirm button is disabled while the preview loads/failed, while a request is pending (double-click guard), or while AI is disabled; each explicit click sends one `POST /api/ai/review` carrying the preview's `contextFingerprint`; the server recomputes the fingerprint and rejects stale confirmations with 409 `AI_CONTEXT_STALE` **before** calling the provider, so changed data or canonical today force a new preview + confirmation. No long-lived authorization state is stored anywhere; cancelling (not confirming) sends zero requests.
+   - Result presentation: the text is labelled AI 生成 with the actual model name and generation time; program-computed stats remain in the preview panel as the canonical numbers, and the AI text is explicitly informational (never canonical data, never medical advice).
+   - E2E without a real key: a `review` project runs against a **local mock DeepSeek provider** (`e2e/mock-deepseek.js`) so the real adapter, config, fingerprint guard, and UI are exercised end to end (429→retry→success, double-click guard, stale fingerprint 409, cancel = zero model calls); a `review-disabled` project covers the preview-only/disabled state. CI never depends on a real key.
+   - Terms wording fixed across `.env.example`/PLAN/PROJECT_CONTEXT/AGENTS: the de-identification/training clause is cited to its public source (2025-09-05《DeepSeek 用户协议》4.3) as possibly outdated — users must re-check the latest terms; running aggregates may still be sensitive; the server enable switch is not a per-send confirmation.
+3. [ ] Batch 3+ (not started, not designed): additional providers or richer context must be approved separately.
 
 ### M3 scope and batches (completed and reviewer-accepted)
 
@@ -123,7 +129,8 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M5 Batch 2: `/settings` athlete profile form and `/daily-status` create/edit/delete page (reviewer-accepted).
 - [x] M5 Batch 3: Dashboard daily-loop integration (reviewer-accepted).
 - [x] M5 Batch 4: daily-loop regression closeout — cross-page React Query invalidation plus a full real-flow closed-loop E2E (reviewer-accepted; M5 stage-complete).
-- [x] M6 Batch 1: bounded training context and server-side read-only DeepSeek integration (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
+- [x] M6 Batch 1: bounded training context and server-side read-only DeepSeek integration (reviewer-accepted rework).
+- [x] M6 Batch 2: 训练回顾页面、发送前确认与本地 mock provider E2E (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
 
 ## M2 implementation record
 

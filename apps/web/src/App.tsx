@@ -6,6 +6,7 @@ import { DailyStatusPage } from './pages/DailyStatusPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { ImportsPage } from './pages/ImportsPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
+import { TrainingReviewPage } from './pages/TrainingReviewPage.js';
 import { TrendsPage } from './pages/TrendsPage.js';
 
 function Layout() {
@@ -18,7 +19,7 @@ function Layout() {
           <NavLink to="/activities" className="text-lg font-bold text-emerald-400">
             RunCoach Local
           </NavLink>
-          <nav className="flex gap-1" aria-label="主导航">
+          <nav className="flex flex-wrap gap-1" aria-label="主导航">
             <NavLink to="/" className={linkClass}>
               概览
             </NavLink>
@@ -30,6 +31,9 @@ function Layout() {
             </NavLink>
             <NavLink to="/daily-status" className={linkClass}>
               状态
+            </NavLink>
+            <NavLink to="/review" className={linkClass}>
+              回顾
             </NavLink>
             <NavLink to="/activities" className={linkClass}>
               活动
@@ -57,6 +61,7 @@ export function App() {
         <Route path="trends" element={<TrendsPage />} />
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="daily-status" element={<DailyStatusPage />} />
+        <Route path="review" element={<TrainingReviewPage />} />
         <Route path="activities" element={<ActivitiesPage />} />
         <Route path="activities/:activityId" element={<ActivityDetailPage />} />
         <Route path="imports" element={<ImportsPage />} />

@@ -24,6 +24,12 @@ export default defineConfig({
       testMatch: /daily-status\.spec\.ts/,
       use: { baseURL: 'http://127.0.0.1:5188' },
     },
+    { name: 'review', testMatch: /review\.spec\.ts/, use: { baseURL: 'http://127.0.0.1:5189' } },
+    {
+      name: 'review-disabled',
+      testMatch: /review-disabled\.spec\.ts/,
+      use: { baseURL: 'http://127.0.0.1:5190' },
+    },
   ],
   webServer: [
     {
@@ -65,6 +71,28 @@ export default defineConfig({
       command:
         'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-daily-status RUNCOACH_PORT=3115 VITE_API_TARGET=http://127.0.0.1:3115 VITE_WEB_PORT=5188 pnpm dev:e2e',
       url: 'http://127.0.0.1:5188/api/health',
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      // Local mock provider (no real key) so the review project exercises the
+      // real server adapter, config, fingerprint guards, and UI end to end.
+      command: 'node e2e/mock-deepseek.mjs',
+      url: 'http://127.0.0.1:3117/health',
+      reuseExistingServer: false,
+      timeout: 60_000,
+    },
+    {
+      command:
+        'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-review RUNCOACH_PORT=3116 VITE_API_TARGET=http://127.0.0.1:3116 VITE_WEB_PORT=5189 RUNCOACH_AI_ENABLED=true RUNCOACH_AI_PROVIDER=deepseek RUNCOACH_DEEPSEEK_API_KEY=e2e-mock-key RUNCOACH_DEEPSEEK_BASE_URL=http://127.0.0.1:3117 RUNCOACH_AI_TIMEOUT_MS=10000 pnpm dev:e2e',
+      url: 'http://127.0.0.1:5189/api/health',
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
+      command:
+        'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-review-disabled RUNCOACH_PORT=3118 VITE_API_TARGET=http://127.0.0.1:3118 VITE_WEB_PORT=5190 pnpm dev:e2e',
+      url: 'http://127.0.0.1:5190/api/health',
       reuseExistingServer: false,
       timeout: 120_000,
     },

@@ -3,6 +3,8 @@ import type {
   ActivityListPage,
   ActivityPatch,
   ActivitySeriesResponse,
+  AiContextPreviewResponse,
+  AiReviewResponse,
   AthleteSettings,
   AthleteSettingsPatch,
   CalendarQuery,
@@ -50,6 +52,23 @@ export function updateActivity(id: string, patch: ActivityPatch): Promise<Activi
 }
 export function getDashboard(): Promise<DashboardResponse> {
   return request('/api/dashboard');
+}
+export function getAiContextPreview(windowDays: 7 | 28): Promise<AiContextPreviewResponse> {
+  return request('/api/ai/context', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ windowDays }),
+  });
+}
+export function requestAiReview(body: {
+  windowDays: 7 | 28;
+  contextFingerprint: string;
+}): Promise<AiReviewResponse> {
+  return request('/api/ai/review', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 export function getTrends(query: TrendsQuery): Promise<TrendsResponse> {
   const params = new URLSearchParams({ weeks: String(query.weeks) });
