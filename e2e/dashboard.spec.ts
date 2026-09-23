@@ -242,8 +242,26 @@ test('dashboard connects the daily loop: profile, today status, today plan, week
   await expect(upcomingCard).not.toContainText('未来已跳过');
   await expect(upcomingCard.getByRole('link', { name: '在日历中查看' })).toHaveAttribute(
     'href',
-    `/calendar?month=${addDays(today, 7).slice(0, 7)}`,
+    // The link must open the month of the FIRST truncated plan (today+6 here),
+    // which can be a different month than the query window's end.
+    `/calendar?month=${addDays(today, 6).slice(0, 7)}`,
   );
+
+  // Above 100%: with a 1-meter target any real RUN distance in the current
+  // week pushes the text percentage far beyond 100 while the progress bar and
+  // its ARIA value stay capped at 100.
+  await page.goto('/settings');
+  await page.getByLabel('每周跑量目标（km）').fill('0.001');
+  await page.getByRole('button', { name: '保存档案' }).click();
+  await expect(page.getByText('运动员档案已保存。')).toBeVisible();
+  await page.goto('/');
+  if (fixtureInWeek) {
+    await expect(page.getByTestId('dashboard-weekly-percent')).toContainText(/已完成 \d{3,}%/);
+    await expect(page.getByRole('progressbar', { name: '本周跑量目标完成进度' })).toHaveAttribute(
+      'aria-valuenow',
+      '100',
+    );
+  }
 
   // Without a display name the generic title is used, never an empty one.
   await page.goto('/settings');
@@ -257,6 +275,44 @@ test('dashboard connects the daily loop: profile, today status, today plan, week
   // Small viewports must not overflow horizontally.
   await page.setViewportSize({ width: 375, height: 720 });
   await expectNoHorizontalOverflow(page);
+
+  expect(pageErrors).toEqual([]);
+});
+
+test('dashboard daily cards degrade locally when their APIs fail', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  // Simulated network failures for the three supporting APIs only — the
+  // dashboard endpoint itself still succeeds, so the page must not go blank
+  // and each failing card must show its own local error instead of fake data.
+  await page.route('**/api/daily-status*', (route) => route.abort());
+  await page.route('**/api/calendar*', (route) => route.abort());
+  await page.route('**/api/settings/athlete*', (route) => route.abort());
+
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: '概览' })).toBeVisible();
+
+  // TanStack Query retries aborted requests a few times before surfacing the
+  // error, so these assertions allow for that backoff window.
+  await expect(page.getByTestId('dashboard-status-card')).toContainText('今日状态加载失败', {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId('dashboard-plans-card')).toContainText('今日计划加载失败', {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId('dashboard-upcoming-card')).toContainText('近期计划加载失败', {
+    timeout: 20_000,
+  });
+  // A settings failure must show a failure state, never "尚未设置周跑量目标".
+  await expect(page.getByTestId('dashboard-weekly-card')).toContainText('周目标设置加载失败', {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId('dashboard-weekly-card')).not.toContainText('尚未设置周跑量目标');
+  // The historical sections still render (earlier scenarios in this project
+  // have already imported a real activity).
+  await expect(page.getByRole('heading', { name: '最近活动' })).toBeVisible();
+  await expect(page.getByText('公开合成跑步')).toBeVisible();
 
   expect(pageErrors).toEqual([]);
 });

@@ -65,7 +65,10 @@ export function DashboardPage() {
           weekMonday={window.weekMonday}
           weekSunday={window.weekSunday}
           targetMeters={settingsQuery.data?.weeklyDistanceTargetMeters ?? null}
-          settingsLoading={settingsQuery.isLoading}
+          settingsStatus={
+            settingsQuery.isLoading ? 'loading' : settingsQuery.isError ? 'error' : 'ready'
+          }
+          settingsErrorMessage={settingsQuery.error?.message ?? null}
         />
         <UpcomingPlansCard today={today} />
       </section>
@@ -165,7 +168,9 @@ function TodayStatusCard({ today }: { today: string }) {
       </div>
       {query.isLoading && <p className="mt-3 text-sm text-slate-400">正在加载今日状态…</p>}
       {query.isError && (
-        <p className="mt-3 text-sm text-red-400">{query.error?.message ?? '今日状态加载失败'}</p>
+        <p className="mt-3 text-sm text-red-400">
+          今日状态加载失败{query.error?.message ? `（${query.error.message}）` : ''}
+        </p>
       )}
       {entry === null && !query.isError && !query.isLoading && (
         <p className="mt-3 text-sm text-slate-400">今天尚未记录状态。</p>
@@ -219,7 +224,9 @@ function TodayPlansCard({ today }: { today: string }) {
       </div>
       {query.isLoading && <p className="mt-3 text-sm text-slate-400">正在加载今日计划…</p>}
       {query.isError && (
-        <p className="mt-3 text-sm text-red-400">{query.error?.message ?? '今日计划加载失败'}</p>
+        <p className="mt-3 text-sm text-red-400">
+          今日计划加载失败{query.error?.message ? `（${query.error.message}）` : ''}
+        </p>
       )}
       {todays.length === 0 && !query.isError && !query.isLoading && (
         <p className="mt-3 text-sm text-slate-400">今天没有计划训练。</p>
@@ -271,27 +278,33 @@ function WeeklyTargetCard({
   weekMonday,
   weekSunday,
   targetMeters,
-  settingsLoading,
+  settingsStatus,
+  settingsErrorMessage,
 }: {
   today: string;
   weekMonday: string;
   weekSunday: string;
   targetMeters: number | null;
-  settingsLoading: boolean;
+  settingsStatus: 'loading' | 'error' | 'ready';
+  settingsErrorMessage: string | null;
 }) {
   const window = dashboardPlanWindow(today);
   const query = useQuery({
     queryKey: ['calendar-plan', window.rangeFrom, window.rangeTo],
     queryFn: () => getCalendarRange({ from: window.rangeFrom, to: window.rangeTo }),
   });
-  const calendarData = query.data?.from === window.rangeFrom ? query.data : null;
-  const actualMeters = weeklyRunDistanceMeters(
-    calendarData?.activities ?? [],
-    weekMonday,
-    weekSunday,
-  );
-  const hasTarget = targetMeters != null;
-  const percent = hasTarget ? weeklyTargetPercent(actualMeters, targetMeters) : 0;
+  // The real distance is only computed from a response that matches the
+  // requested window — a pending or failed calendar request is never treated
+  // as "0 km".
+  const calendarReady = query.data !== undefined && query.data.from === window.rangeFrom;
+  const hasTarget = settingsStatus === 'ready' && targetMeters != null;
+  const percent =
+    hasTarget && calendarReady
+      ? weeklyTargetPercent(
+          weeklyRunDistanceMeters(query.data?.activities ?? [], weekMonday, weekSunday),
+          targetMeters,
+        )
+      : 0;
   return (
     <div
       className="rounded-xl border border-slate-800 bg-slate-900 p-5"
@@ -299,31 +312,54 @@ function WeeklyTargetCard({
     >
       <div className="flex items-center justify-between">
         <h2 className="font-semibold">本周跑量</h2>
-        {!hasTarget && !settingsLoading && (
+        {settingsStatus === 'ready' && targetMeters === null && (
           <Link to="/settings" className="text-sm text-emerald-400">
             前往设置
           </Link>
         )}
       </div>
-      {settingsLoading && <p className="mt-3 text-sm text-slate-400">正在加载周目标…</p>}
-      {!settingsLoading && !hasTarget && (
+      {settingsStatus === 'loading' && (
+        <p className="mt-3 text-sm text-slate-400">正在加载周目标…</p>
+      )}
+      {settingsStatus === 'error' && (
+        <p className="mt-3 text-sm text-red-400" data-testid="dashboard-weekly-settings-error">
+          周目标设置加载失败
+          {settingsErrorMessage !== null ? `（${settingsErrorMessage}）` : ''}
+        </p>
+      )}
+      {settingsStatus === 'ready' && targetMeters === null && (
         <p className="mt-3 text-sm text-slate-400">
           尚未设置周跑量目标。可在设置中添加，本应用不会自动生成目标。
         </p>
       )}
-      {hasTarget && (
+      {hasTarget && query.isLoading && (
+        <p className="mt-3 text-sm text-slate-400">正在加载本周跑量…</p>
+      )}
+      {hasTarget && query.isError && (
+        <p className="mt-3 text-sm text-red-400" data-testid="dashboard-weekly-error">
+          本周跑量数据加载失败{query.error?.message ? `（${query.error.message}）` : ''}
+        </p>
+      )}
+      {hasTarget && !query.isLoading && !query.isError && !calendarReady && (
+        <p className="mt-3 text-sm text-slate-400">正在加载本周跑量…</p>
+      )}
+      {hasTarget && calendarReady && (
         <div className="mt-3">
           <p className="text-sm text-slate-300">
             本周实际{' '}
-            <span data-testid="dashboard-weekly-actual">{formatDistance(actualMeters)}</span> ·
-            周目标 {formatDistance(targetMeters)}
+            <span data-testid="dashboard-weekly-actual">
+              {formatDistance(
+                weeklyRunDistanceMeters(query.data?.activities ?? [], weekMonday, weekSunday),
+              )}
+            </span>{' '}
+            · 周目标 {formatDistance(targetMeters)}
           </p>
           <div
             className="mt-2 h-2 w-full overflow-hidden rounded bg-slate-800"
             role="progressbar"
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={Math.round(percent)}
+            aria-valuenow={Math.min(100, Math.round(percent))}
             aria-label="本周跑量目标完成进度"
           >
             <div
@@ -331,6 +367,8 @@ function WeeklyTargetCard({
               style={{ width: `${Math.min(100, percent)}%` }}
             />
           </div>
+          {/* The text keeps the real percentage even above 100%; only the bar
+              and its ARIA value are capped so the layout cannot overflow. */}
           <p className="mt-1 text-xs text-slate-500" data-testid="dashboard-weekly-percent">
             已完成 {Math.round(percent)}%（仅统计实际 RUN 距离）
           </p>
@@ -348,7 +386,10 @@ function UpcomingPlansCard({ today }: { today: string }) {
   });
   const calendarData = query.data?.from === window.rangeFrom ? query.data : null;
   const upcoming = upcomingPlannedWorkouts(calendarData?.plannedWorkouts ?? [], today);
-  const month = monthOf(window.rangeTo);
+  // When plans were cut off, open the calendar on the month of the FIRST
+  // truncated plan (which may lie in the next month), so the user actually
+  // sees at least that item after clicking.
+  const month = monthOf(upcoming.firstTruncatedLocalDate ?? window.rangeTo);
   return (
     <div
       className="rounded-xl border border-slate-800 bg-slate-900 p-5"
@@ -364,7 +405,9 @@ function UpcomingPlansCard({ today }: { today: string }) {
       </div>
       {query.isLoading && <p className="mt-3 text-sm text-slate-400">正在加载近期计划…</p>}
       {query.isError && (
-        <p className="mt-3 text-sm text-red-400">{query.error?.message ?? '近期计划加载失败'}</p>
+        <p className="mt-3 text-sm text-red-400">
+          近期计划加载失败{query.error?.message ? `（${query.error.message}）` : ''}
+        </p>
       )}
       {upcoming.items.length === 0 && !query.isError && !query.isLoading && (
         <p className="mt-3 text-sm text-slate-400">未来 7 天没有计划训练。</p>

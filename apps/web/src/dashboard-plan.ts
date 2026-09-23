@@ -48,12 +48,18 @@ export const UPCOMING_PLANS_LIMIT = 5;
 export interface UpcomingPlans {
   items: CalendarPlannedWorkout[];
   hasMore: boolean;
+  /**
+   * Scheduled date of the first plan cut off by the limit; null when nothing
+   * was truncated. The dashboard links to this month so the user actually
+   * sees at least that plan (it may lie in the next month).
+   */
+  firstTruncatedLocalDate: string | null;
 }
 
 /**
  * Plans strictly after `today`, within the next 7 local dates, still
  * PLANNED, ordered by date then title then id (deterministic codepoint
- * order); at most {@link UPCOMING_PLANS_LIMIT} items plus a hasMore flag.
+ * order); at most {@link UPCOMING_PLANS_LIMIT} items plus truncation info.
  */
 export function upcomingPlannedWorkouts(
   plans: CalendarPlannedWorkout[],
@@ -72,9 +78,11 @@ export function upcomingPlannedWorkouts(
         plan.scheduledLocalDate <= until,
     )
     .sort(byDateThenTitleThenId);
+  const hasMore = filtered.length > UPCOMING_PLANS_LIMIT;
   return {
     items: filtered.slice(0, UPCOMING_PLANS_LIMIT),
-    hasMore: filtered.length > UPCOMING_PLANS_LIMIT,
+    hasMore,
+    firstTruncatedLocalDate: hasMore ? filtered[UPCOMING_PLANS_LIMIT]!.scheduledLocalDate : null,
   };
 }
 

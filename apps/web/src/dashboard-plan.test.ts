@@ -121,7 +121,10 @@ describe('upcomingPlannedWorkouts', () => {
         title: `计划 ${index + 1}`,
       }),
     );
-    const { items, hasMore } = upcomingPlannedWorkouts(plans, '2026-09-23');
+    const { items, hasMore, firstTruncatedLocalDate } = upcomingPlannedWorkouts(
+      plans,
+      '2026-09-23',
+    );
     expect(items).toHaveLength(5);
     expect(items.map((entry) => entry.title)).toEqual([
       '计划 1',
@@ -131,6 +134,37 @@ describe('upcomingPlannedWorkouts', () => {
       '计划 5',
     ]);
     expect(hasMore).toBe(true);
+    expect(firstTruncatedLocalDate).toBe('2026-09-24');
+  });
+
+  it('reports the first truncated plan across a month boundary', () => {
+    // Five plans stay in September; the truncated one is already in October.
+    const plans = [
+      ...Array.from({ length: 5 }, (_, index) =>
+        plan({
+          id: `00000000-0000-4000-8000-00000000000${index}`,
+          scheduledLocalDate: '2026-09-29',
+          title: `九月计划 ${index + 1}`,
+        }),
+      ),
+      plan({
+        id: '00000000-0000-4000-8000-000000000009',
+        scheduledLocalDate: '2026-10-02',
+        title: '十月计划',
+      }),
+    ];
+    const { hasMore, firstTruncatedLocalDate } = upcomingPlannedWorkouts(plans, '2026-09-28');
+    expect(hasMore).toBe(true);
+    expect(firstTruncatedLocalDate).toBe('2026-10-02');
+  });
+
+  it('reports null truncation when nothing was cut off', () => {
+    const { hasMore, firstTruncatedLocalDate } = upcomingPlannedWorkouts(
+      [plan({ id: '1', scheduledLocalDate: '2026-09-24' })],
+      '2026-09-23',
+    );
+    expect(hasMore).toBe(false);
+    expect(firstTruncatedLocalDate).toBeNull();
   });
 });
 
