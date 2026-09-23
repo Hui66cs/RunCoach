@@ -6,7 +6,20 @@ M1/M1.1 and M2 are complete and frozen. M2.1 is complete: a repeatable performan
 
 M4 (training calendar and local training plans) has completed stage acceptance with the verdict PASS WITH FOLLOW-UP: Batch 1 (calendar, planned-workout CRUD, calendar projection) and Batch 2 (plan completion status, manual one-to-one plan-to-activity links, adherence rate, weekly rollups) are both accepted at milestone-stage level, with follow-up items recorded for future batches.
 
-The approved current milestone is M5: athlete profile and daily training context. Its overall goal is the daily-use loop — open the app, see today's plan, record daily status, complete the training, and link the activity — by (1) completing the athlete profile and daily status data model, (2) later surfacing daily status, today's plan, and recent plans on the Dashboard, and (3) keeping all determinism, privacy, and no-AI/no-medical rules intact.
+The approved current milestone is M5: athlete profile and daily training context. Its overall goal is the daily-use loop — open the app, see today's plan, record daily status, complete the training, and link the activity — by (1) completing the athlete profile and daily status data model, (2) later surfacing daily status, today's plan, and recent plans on the Dashboard, and (3) keeping all determinism, privacy, and no-AI/no-medical rules intact. M5 Batch 4 is reviewer-accepted, so M5 is stage-complete.
+
+M6 (approved): bounded training context and a server-side, read-only DeepSeek review — the narrowest possible AI step. It generates a whitelisted numeric context from existing deterministic aggregates and lets the user explicitly request a natural-language review; it does not generate plans, adjust training, score readiness, or send anything automatically.
+
+### M6 scope and batches
+
+1. [x] Batch 1: bounded AI context and DeepSeek server-side read-only integration. **Implemented, awaiting reviewer acceptance.** Delivered:
+   - `AiTrainingContext` (shared Zod schema): an explicit whitelist — canonical `generatedForLocalDate`/`timezoneOffsetMinutes`, `windowDays` (7 or 28), inclusive `windowStartLocalDate`/`windowEndLocalDate`, the matching dashboard 7/28-day run summary (runs, total distance/moving duration, average pace), Monday-start weekly volumes intersecting the window (≤5), and the training-summary counts. Structurally excludes raw imports, samples, GPS, heart rate, daily-status scales, activity names, notes, profile text, and secrets.
+   - `POST /api/ai/review`: user-triggered only; body `{windowDays: 7|28}` (default 28) via `aiReviewRequestSchema`; response `aiReviewResponseSchema` (`context`, `review` trimmed 1–`MAX_AI_REVIEW_CHARS`(4000) chars, `model` ≤100 chars, `generatedAt`). Context is built from `getDashboard(today)` + `getTrainingSummary` with the same canonical today; the provider prompt is assembled server-side from the context JSON only.
+   - `TrainingReviewProvider` interface (`apps/server/src/services/ai/provider.ts`) with the `DeepSeekReviewProvider` chat-completions adapter: timeout via AbortController, Zod-parsed upstream responses at the boundary, the API key used only in the Authorization header (never logged, never sent to the frontend, never committed).
+   - Config (`RUNCOACH_AI_ENABLED`/`RUNCOACH_AI_PROVIDER`/`RUNCOACH_DEEPSEEK_API_KEY`/`RUNCOACH_DEEPSEEK_BASE_URL`/`RUNCOACH_AI_TIMEOUT_MS`/`RUNCOACH_AI_MAX_OUTPUT_TOKENS`): real calls require the explicit flag, the deepseek provider, and a key — disabled by default; `.env.example` documents this and that DeepSeek's terms permit de-identified use of inputs for model improvement, so enabling is an informed user decision.
+   - Stable sanitized errors: 503 `AI_DISABLED`, 400 `INVALID_AI_REVIEW_REQUEST`, 504 `AI_TIMEOUT`, 429 `AI_RATE_LIMITED`, 502 `AI_PROVIDER_ERROR`/`AI_EMPTY_RESPONSE`/`AI_INVALID_OUTPUT`; no upstream body, key, or path ever reaches a client message; no code path writes to SQLite; no chat history table.
+   - DeepSeek terms check: the whitelisted fields are numeric aggregates with no personal identifiers, health data, location, or free text, so they are suitable for the DeepSeek API; the terms' de-identification/training clause is handled by the explicit opt-in (default-disabled, user-triggered) rather than a data-range expansion.
+2. [ ] Batch 2+ (not started, not designed): any frontend review UI, additional providers, or richer context must be approved separately.
 
 ### M3 scope and batches (completed and reviewer-accepted)
 
@@ -69,7 +82,7 @@ M5 still excludes: readiness/recovery composite scores, training advice or autom
 
 ### Excluded
 
-- AI-generated training plans, DeepSeek/OpenAI or other model integrations, daily check-ins, ParroTao online synchronization, watch or Garmin Connect writes, authentication/multi-user, cloud synchronization, social features, online maps, installers, medical diagnosis, and injury advice.
+- AI-generated training plans, readiness/recovery scoring, additional LLM providers beyond the M6 Batch 1 server-side read-only DeepSeek review, chat or memory features, daily check-ins, ParroTao online synchronization, watch or Garmin Connect writes, authentication/multi-user, cloud synchronization, social features, online maps, installers, medical diagnosis, and injury advice.
 
 ## Acceptance flow
 
@@ -109,7 +122,8 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M5 Batch 1: athlete profile fields and daily status data/API foundation (reviewer-accepted).
 - [x] M5 Batch 2: `/settings` athlete profile form and `/daily-status` create/edit/delete page (reviewer-accepted).
 - [x] M5 Batch 3: Dashboard daily-loop integration (reviewer-accepted).
-- [x] M5 Batch 4: daily-loop regression closeout — cross-page React Query invalidation (Calendar mutations also invalidate `['calendar-plan']`; imports also invalidate `['dashboard']` and `['calendar-plan']`) plus a full real-flow closed-loop E2E (dashboard today → plan → status → CSV import → manual link & complete → dashboard reflects, reload persists, 409 failure does not fake success, test cleans only its own data). **Implemented, awaiting reviewer acceptance; M5 as a whole is not yet accepted.**
+- [x] M5 Batch 4: daily-loop regression closeout — cross-page React Query invalidation plus a full real-flow closed-loop E2E (reviewer-accepted; M5 stage-complete).
+- [x] M6 Batch 1: bounded training context and server-side read-only DeepSeek integration (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
 
 ## M2 implementation record
 

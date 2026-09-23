@@ -752,3 +752,57 @@ export const dailyStatusRangeResponseSchema = z.object({
   items: z.array(dailyStatusEntrySchema),
 });
 export type DailyStatusRangeResponse = z.infer<typeof dailyStatusRangeResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// AI bounded training context (M6): a read-only, explicitly user-triggered
+// review built from existing deterministic aggregates. The context carries an
+// explicit numeric whitelist only — never raw imports, samples, GPS, heart
+// rate, daily status, free-text notes, or secrets. Real provider calls are
+// disabled unless the server operator enables them.
+// ---------------------------------------------------------------------------
+
+export const MAX_AI_CONTEXT_DAYS = 28;
+/** Maximum characters accepted for a model review text. */
+export const MAX_AI_REVIEW_CHARS = 4000;
+
+export const aiReviewWindowDaysSchema = z.union([z.literal(7), z.literal(28)]);
+export type AiReviewWindowDays = z.infer<typeof aiReviewWindowDaysSchema>;
+
+export const aiReviewRequestSchema = z.strictObject({
+  windowDays: aiReviewWindowDaysSchema.default(28),
+});
+export type AiReviewRequest = z.infer<typeof aiReviewRequestSchema>;
+
+/** Same shape as the dashboard period summary (numeric run aggregates). */
+export const aiContextRunSummarySchema = z.object({
+  runs: z.number().int().nonnegative(),
+  totalDistanceMeters: z.number().nonnegative(),
+  totalMovingDurationSeconds: z.number().nonnegative(),
+  averagePaceSecondsPerKilometer: z.number().positive().nullable(),
+});
+export type AiContextRunSummary = z.infer<typeof aiContextRunSummarySchema>;
+
+/**
+ * The full field whitelist sent to the model. Every nested key is a numeric
+ * aggregate or a local date — intentionally excluding activity names, notes,
+ * heart rate, GPS coordinates, daily-status scales, and profile text.
+ */
+export const aiTrainingContextSchema = z.object({
+  generatedForLocalDate: z.iso.date(),
+  timezoneOffsetMinutes: z.number().int().min(-840).max(840),
+  windowDays: z.number().int().min(1).max(MAX_AI_CONTEXT_DAYS),
+  windowStartLocalDate: z.iso.date(),
+  windowEndLocalDate: z.iso.date(),
+  running: aiContextRunSummarySchema,
+  weeklyVolumes: z.array(dashboardWeeklyVolumeSchema).max(5),
+  planSummary: trainingSummaryCountsSchema,
+});
+export type AiTrainingContext = z.infer<typeof aiTrainingContextSchema>;
+
+export const aiReviewResponseSchema = z.object({
+  context: aiTrainingContextSchema,
+  review: z.string().trim().min(1).max(MAX_AI_REVIEW_CHARS),
+  model: z.string().trim().min(1).max(100),
+  generatedAt: z.iso.datetime(),
+});
+export type AiReviewResponse = z.infer<typeof aiReviewResponseSchema>;

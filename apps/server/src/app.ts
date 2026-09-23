@@ -6,6 +6,8 @@ import {
   activityListQuerySchema,
   activityPatchSchema,
   activitySeriesQuerySchema,
+  aiReviewRequestSchema,
+  aiReviewResponseSchema,
   athleteSettingsPatchSchema,
   calendarQuerySchema,
   calendarResponseSchema,
@@ -27,6 +29,8 @@ import {
 import type { AppConfig } from './config.js';
 import type { ActivityRepository } from './repositories/activity-repository.js';
 import type { ImportService } from './services/import-service.js';
+import type { AiReviewService } from './services/ai/ai-review-service.js';
+import { AiServiceError } from './services/ai/ai-review-service.js';
 import { RepositoryConflictError } from './repositories/activity-repository.js';
 import { sanitizeErrorMessage } from './errors.js';
 
@@ -34,7 +38,18 @@ interface AppDependencies {
   config: AppConfig;
   repository: ActivityRepository;
   importService: ImportService;
+  /** Optional: absent (the default in tests) keeps the AI review disabled. */
+  aiReview?: AiReviewService;
 }
+
+const aiServiceErrorStatus: Record<string, number> = {
+  AI_DISABLED: 503,
+  AI_TIMEOUT: 504,
+  AI_RATE_LIMITED: 429,
+  AI_PROVIDER_ERROR: 502,
+  AI_EMPTY_RESPONSE: 502,
+  AI_INVALID_OUTPUT: 502,
+};
 
 const activityParamsSchema = z.object({ activityId: z.string().uuid() });
 const itemParamsSchema = z.object({ itemId: z.string().uuid() });
@@ -190,6 +205,28 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     const deleted = dependencies.repository.deletePlannedWorkout(params.data.workoutId);
     if (!deleted) return reply.code(404).send({ code: 'NOT_FOUND', message: '计划训练不存在' });
     return reply.code(204).send();
+  });
+
+  app.post('/api/ai/review', async (request, reply) => {
+    const service = dependencies.aiReview;
+    if (service === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    const body = aiReviewRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply
+        .code(400)
+        .send({ code: 'INVALID_AI_REVIEW_REQUEST', message: 'AI 回顾请求无效' });
+    }
+    try {
+      return aiReviewResponseSchema.parse(await service.review(body.data));
+    } catch (error) {
+      if (error instanceof AiServiceError) {
+        const status = aiServiceErrorStatus[error.code] ?? 502;
+        return reply.code(status).send({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
   });
 
   app.get('/api/settings/athlete', () => dependencies.repository.getAthleteSettings());

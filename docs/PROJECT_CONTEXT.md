@@ -2,7 +2,7 @@
 
 > 建议落盘位置：`docs/PROJECT_CONTEXT.md`
 > 项目仓库：<https://github.com/Hui66cs/RunCoach>（默认分支为 `master`）
-> 当前基线：`master` 分支，当前里程碑 M5（运动员档案、每日状态与日常训练闭环）；M1–M4 均已完成并冻结，M5 Batch 1–3 已验收，Batch 4（日常闭环回归与阶段收口）已实现、等待 reviewer 验收。此前版本基于更早里程碑编写。
+> 当前基线：`master` 分支，当前里程碑 M6（有界训练上下文与 DeepSeek 服务端只读接入）；M1–M5 均已完成并冻结（M5 Batch 4 已验收），M6 Batch 1 已实现、等待 reviewer 验收。此前版本基于更早里程碑编写。
 > 状态标记：**已实现**表示当前代码具备；**已决定、未实现**表示后续应遵守的设计；**不确定**表示必须重新查证，不能自行假设。
 
 ## 1. 项目总体目标
@@ -89,9 +89,19 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
   - 前端：计划条目显示文字 badge（待完成/已完成/已跳过/已逾期，其中逾期为派生显示）并用样式区分；编辑对话框提供 标记为已完成、关联实际活动并完成（候选复用当前日历范围内已加载活动，展示日期/名称/类型/距离/时长）、标记为已跳过、恢复为待完成、解除活动关联；`COMPLETED` 状态下可直接 补充关联活动（人工完成无关联时）或 更换关联活动（已有关联时），状态保持 `COMPLETED`，无需先恢复待完成；`SKIPPED` 不直接关联，须先恢复待完成。已关联活动显示摘要并可跳转详情；409 显示可读错误；completion 与 metadata 保存互不覆盖；mutation 后刷新 calendar 与 training-summary 查询。月度执行率只按真实月首到月末请求（不含网格补位日期），展示本月计划数、已完成数、已跳过/逾期数、执行率与按周汇总紧凑表格，含 loading/error/empty 与 `adherenceRate = null`（“暂无可计算计划”）状态；窄屏用紧凑列表，不横向溢出、不依赖 hover。
   - 本批不做：自动匹配建议、拖拽关联、批量完成、多活动关联、按距离/时间/标题自动判断完成。
 
-### 当前里程碑 M5（运动员档案与每日训练上下文，进行中）
+### 当前里程碑 M6（有界训练上下文与 AI 回顾，进行中）
 
-总体目标：补齐运动员档案与每日状态，之后把每日状态、今天的计划和近期计划接入 Dashboard，形成“每天打开应用 → 查看计划 → 记录状态 → 完成训练 → 关联活动”的日常使用闭环。每日状态是用户自报数据，不产生任何医疗判断、readiness/recovery 综合评分或自动训练调整。
+总体目标：在既有确定性聚合之上生成有界的训练上下文，并提供用户主动触发的服务端只读 AI 回顾（DeepSeek），作为最窄范围的 AI 接入。不生成训练计划、不调整训练、不做 readiness 评分、不自动发送任何数据。
+
+- M5 阶段收口：Batch 1–4 全部通过 reviewer 验收，M5 阶段完成。
+- M6 Batch 1 已实现（等待 reviewer 验收）：
+  - `AiTrainingContext`（shared Zod schema）字段白名单：canonical `generatedForLocalDate`/`timezoneOffsetMinutes`、`windowDays`（7 或 28）、闭区间 `windowStartLocalDate`/`windowEndLocalDate`、对应窗口的 dashboard 7/28 天跑步汇总（次数、总距离、总移动时长、平均配速）、与窗口相交的周一起始周汇总（≤5 个）、training-summary 计数。结构性排除：原始导入、samples、GPS、心率、每日状态量表、活动名称、自由文本备注、档案文本、任何密钥。
+  - `POST /api/ai/review`：仅由用户主动触发；请求体 `aiReviewRequestSchema`（`windowDays: 7|28`，默认 28）；响应 `aiReviewResponseSchema`（context、review 1–4000 字符、model ≤100 字符、generatedAt）。上下文由 `getDashboard(today)` 与 `getTrainingSummary` 用同一 canonical today 组装；prompt 仅由上下文 JSON 服务端拼装。
+  - Provider 接口 `TrainingReviewProvider`（`apps/server/src/services/ai/provider.ts`，可注入测试替身）+ `DeepSeekReviewProvider` chat-completions adapter：AbortController 超时、上游响应在边界用 Zod 解析、API key 只出现在 Authorization 头，绝不进入前端、日志或 Git。
+  - 配置：`RUNCOACH_AI_ENABLED` + `RUNCOACH_AI_PROVIDER=deepseek` + `RUNCOACH_DEEPSEEK_API_KEY` 三者同时满足才启用真实调用，默认禁用；`.env.example` 注明 DeepSeek 条款允许在去标识化前提下将输入输出用于模型优化，开启属用户知情决定。
+  - 稳定且脱敏的错误：503 `AI_DISABLED`、400 `INVALID_AI_REVIEW_REQUEST`、504 `AI_TIMEOUT`、429 `AI_RATE_LIMITED`、502 `AI_PROVIDER_ERROR`/`AI_EMPTY_RESPONSE`/`AI_INVALID_OUTPUT`；上游响应体、key、本地路径不出现在任何客户端消息中；任何失败路径都不写 SQLite；不新增聊天记录表。
+  - DeepSeek 条款核对结论：白名单字段均为数值聚合，不含个人标识、健康数据、位置或自由文本，适合其 API；条款中的去标识化训练条款通过“默认禁用 + 显式 opt-in”处理，未因此扩大数据范围。
+  - 本批不做：前端回顾 UI（后续 Batch 需另行批准）、更多 LLM provider、聊天/记忆功能、自动发送、AI 计划生成。
 
 - Batch 1 已通过 reviewer 验收：运动员档案字段与每日状态的数据/API 基础，本批不含任何前端。
   - `0005_daily_training_context.sql`（forward-only，不改 0000–0004；重复执行幂等）：
@@ -122,12 +132,12 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
 
 ### 冻结不做（跨里程碑有效）
 
-- AI 自动生成训练计划、DeepSeek/OpenAI 或其他模型接入。
+- AI 自动生成训练计划、readiness/recovery 综合评分、除 M6 Batch 1 服务端只读 DeepSeek 回顾之外的其他模型接入、聊天或记忆功能。
 - 手表下发或 Garmin Connect 写入。
 - 成就系统。
 - 每日状态的社交化打卡、基于每日状态的自动计划调整或医疗结论（M5 Batch 1 已批准自报每日状态的数据模型与 API，不含任何派生结论）。
 - ParroTao 在线同步的实际网络实现。
-- DeepSeek、Codex App Server 或任何 AI 教练。
+- Codex App Server 或任何 AI 教练。
 - 登录、多用户、社交、云同步。
 - 在线地图瓦片服务。
 - 备份/恢复、Windows 安装包和正式发布。
