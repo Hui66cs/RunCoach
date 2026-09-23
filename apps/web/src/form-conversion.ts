@@ -125,40 +125,52 @@ export function dailyStatusFormState(entry: DailyStatusEntry | null): DailyStatu
 }
 
 /**
- * Converts the form into a `DailyStatusUpsert`. Blank scale fields and an
- * empty resting heart rate are simply absent (the server keeps the stored
- * value), notes follow the shared blank-to-null semantics. Returns
- * `upsert: null` with `error: null` when nothing meaningful was filled in
- * (the caller must not create an all-null record), or `error` with a
- * user-facing message for invalid values.
+ * Converts the form into a `DailyStatusUpsert`. When at least one field is
+ * meaningful, EVERY editable field is sent: a filled scale becomes a number,
+ * "未填写" becomes explicit null (clearing), an empty resting heart rate and
+ * blank notes become null, and a real note is sent as-is (the shared schema
+ * trims it identically to the backend). This is what lets the user clear a
+ * previously saved field: the backend contract is "absent keeps the old
+ * value, null clears". Returns `upsert: null` with `error: null` for a fully
+ * empty form (the caller must not create an all-null record), or `error`
+ * with a user-facing message for invalid values.
  */
 export function buildDailyStatusUpsert(state: DailyStatusFormState): {
   upsert: DailyStatusUpsert | null;
   error: string | null;
 } {
   const rhrTrimmed = state.restingHeartRateBpm.trim();
-  let restingHeartRateBpm: number | undefined;
+  let restingHeartRateBpm: number | null;
   if (rhrTrimmed.length > 0) {
     const value = Number(rhrTrimmed);
     if (!Number.isInteger(value) || value < 30 || value > 220) {
       return { upsert: null, error: '静息心率必须是 30–220 之间的整数 bpm' };
     }
     restingHeartRateBpm = value;
+  } else {
+    restingHeartRateBpm = null;
   }
-  const upsert: DailyStatusUpsert = {};
+  const scales: Partial<Record<DailyStatusScaleField, number | null>> = {};
+  let hasScale = false;
   for (const field of DAILY_STATUS_SCALE_FIELDS) {
     const raw = state[field].trim();
-    if (raw.length === 0) continue;
+    if (raw.length === 0) {
+      scales[field] = null;
+      continue;
+    }
     const value = Number(raw);
     if (!Number.isInteger(value) || value < 1 || value > 5) {
       return { upsert: null, error: '每个量表必须是 1–5 之间的整数' };
     }
-    upsert[field] = value;
+    scales[field] = value;
+    hasScale = true;
   }
-  if (restingHeartRateBpm !== undefined) upsert.restingHeartRateBpm = restingHeartRateBpm;
-  // A whitespace-only note counts as empty; a real note is sent as-is and the
-  // shared schema trims and normalizes it identically to the backend.
-  if (state.notes.trim().length > 0) upsert.notes = state.notes;
-  if (Object.keys(upsert).length === 0) return { upsert: null, error: null };
-  return { upsert, error: null };
+  const notesTrimmed = state.notes.trim();
+  const notes = notesTrimmed.length > 0 ? state.notes : null;
+  const hasMeaningfulField = hasScale || rhrTrimmed.length > 0 || notesTrimmed.length > 0;
+  if (!hasMeaningfulField) return { upsert: null, error: null };
+  return {
+    upsert: { ...scales, restingHeartRateBpm, notes },
+    error: null,
+  };
 }

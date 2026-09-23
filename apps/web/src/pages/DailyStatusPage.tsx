@@ -259,28 +259,34 @@ function DailyStatusForm(props: {
               {scale.label}（{scale.description}）
             </legend>
             <div className="mt-1 flex flex-wrap gap-1.5">
-              {[1, 2, 3, 4, 5].map((value) => {
-                const checked = state[scale.field] === String(value);
+              {['', 1, 2, 3, 4, 5].map((value) => {
+                const rawValue = String(value);
+                const checked = state[scale.field] === rawValue;
+                const isUnset = value === '';
                 return (
                   <label
-                    key={value}
+                    key={rawValue}
                     className={`flex cursor-pointer flex-col items-center rounded border px-2 py-1 text-xs ${
                       checked
-                        ? 'border-emerald-500 bg-emerald-500/20 text-emerald-200'
+                        ? isUnset
+                          ? 'border-slate-400 bg-slate-700/60 text-slate-200'
+                          : 'border-emerald-500 bg-emerald-500/20 text-emerald-200'
                         : 'border-slate-700 text-slate-400 hover:border-slate-500'
                     }`}
                   >
                     <input
                       type="radio"
                       name={scale.field}
-                      value={value}
+                      value={rawValue}
                       checked={checked}
-                      onChange={() => update({ [scale.field]: String(value) })}
-                      aria-label={`${scale.label} ${value}`}
+                      onChange={() => update({ [scale.field]: rawValue })}
+                      aria-label={isUnset ? `${scale.label} 未填写` : `${scale.label} ${value}`}
                       className="accent-emerald-500"
                     />
-                    <span>{value}</span>
-                    <span className="text-[10px] text-slate-500">{scale.hints[value - 1]}</span>
+                    <span>{isUnset ? '—' : value}</span>
+                    <span className="text-[10px] text-slate-500">
+                      {isUnset ? '未填写' : scale.hints[Number(value) - 1]}
+                    </span>
                   </label>
                 );
               })}

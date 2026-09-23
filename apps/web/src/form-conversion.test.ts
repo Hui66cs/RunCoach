@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AthleteSettings, DailyStatusEntry } from '@runcoach/shared';
+import { dailyStatusUpsertSchema } from '@runcoach/shared';
 import {
   athleteProfileFormState,
   buildAthleteProfilePatch,
@@ -135,6 +136,30 @@ describe('daily status form conversion', () => {
     });
   });
 
+  it('sends every field for a partially filled new record, blanks as null, and passes the shared schema', () => {
+    const { upsert, error } = buildDailyStatusUpsert({
+      sleepQuality: '1',
+      fatigueLevel: '',
+      muscleSorenessLevel: '',
+      stressLevel: '',
+      motivationLevel: '',
+      restingHeartRateBpm: '',
+      notes: '',
+    });
+    expect(error).toBeNull();
+    expect(upsert).toEqual({
+      sleepQuality: 1,
+      fatigueLevel: null,
+      muscleSorenessLevel: null,
+      stressLevel: null,
+      motivationLevel: null,
+      restingHeartRateBpm: null,
+      notes: null,
+    });
+    // The payload must be accepted by the shared upsert contract unchanged.
+    expect(dailyStatusUpsertSchema.parse(upsert)).toEqual(upsert);
+  });
+
   it('accepts the 1 and 5 scale boundaries and converts them to numbers', () => {
     const { upsert, error } = buildDailyStatusUpsert({
       sleepQuality: '1',
@@ -146,7 +171,7 @@ describe('daily status form conversion', () => {
       notes: '',
     });
     expect(error).toBeNull();
-    expect(upsert).toEqual({ sleepQuality: 1, fatigueLevel: 5 });
+    expect(upsert).toMatchObject({ sleepQuality: 1, fatigueLevel: 5 });
   });
 
   it('rejects out-of-range and decimal scale values', () => {
@@ -166,18 +191,16 @@ describe('daily status form conversion', () => {
   });
 
   it('accepts resting heart rate bounds 30 and 220 and rejects 29, 221, and decimals', () => {
-    expect(
-      buildDailyStatusUpsert({
-        ...dailyStatusFormState(null),
-        restingHeartRateBpm: '30',
-      }).upsert,
-    ).toEqual({ restingHeartRateBpm: 30 });
-    expect(
-      buildDailyStatusUpsert({
-        ...dailyStatusFormState(null),
-        restingHeartRateBpm: '220',
-      }).upsert,
-    ).toEqual({ restingHeartRateBpm: 220 });
+    const min = buildDailyStatusUpsert({
+      ...dailyStatusFormState(null),
+      restingHeartRateBpm: '30',
+    });
+    expect(min.upsert).toMatchObject({ restingHeartRateBpm: 30 });
+    const max = buildDailyStatusUpsert({
+      ...dailyStatusFormState(null),
+      restingHeartRateBpm: '220',
+    });
+    expect(max.upsert).toMatchObject({ restingHeartRateBpm: 220 });
     for (const value of ['29', '221', '30.5', 'abc']) {
       const { upsert, error } = buildDailyStatusUpsert({
         ...dailyStatusFormState(null),
@@ -188,24 +211,62 @@ describe('daily status form conversion', () => {
     }
   });
 
-  it('trims meaningful notes and lets the shared schema handle blank notes', () => {
-    const meaningful = buildDailyStatusUpsert({
+  it('clears a scale by sending null for the 未填写 selection', () => {
+    // A previously filled scale switched back to 未填写 becomes explicit null.
+    const { upsert, error } = buildDailyStatusUpsert({
+      ...dailyStatusFormState(ENTRY),
+      sleepQuality: '',
+    });
+    expect(error).toBeNull();
+    expect(upsert).toMatchObject({
+      sleepQuality: null,
+      fatigueLevel: 5,
+      stressLevel: 3,
+      restingHeartRateBpm: 52,
+      notes: '睡眠正常',
+    });
+    expect(dailyStatusUpsertSchema.parse(upsert)).toEqual(upsert);
+  });
+
+  it('clears resting heart rate with null when the input is emptied', () => {
+    const { upsert, error } = buildDailyStatusUpsert({
+      ...dailyStatusFormState(ENTRY),
+      restingHeartRateBpm: '   ',
+    });
+    expect(error).toBeNull();
+    expect(upsert).toMatchObject({ restingHeartRateBpm: null, fatigueLevel: 5 });
+    expect(dailyStatusUpsertSchema.parse(upsert)).toEqual(upsert);
+  });
+
+  it('clears notes with null when they are empty or whitespace-only', () => {
+    for (const notes of ['', '   ']) {
+      const { upsert, error } = buildDailyStatusUpsert({
+        ...dailyStatusFormState(ENTRY),
+        notes,
+      });
+      expect(error, JSON.stringify(notes)).toBeNull();
+      expect(upsert, JSON.stringify(notes)).toMatchObject({ notes: null, fatigueLevel: 5 });
+      expect(dailyStatusUpsertSchema.parse(upsert)).toEqual(upsert);
+    }
+  });
+
+  it('sends a meaningful note as-is and the shared schema trims it identically', () => {
+    const { upsert, error } = buildDailyStatusUpsert({
       ...dailyStatusFormState(null),
       notes: '  睡眠正常  ',
     });
-    // The raw text is sent; the shared upsert schema trims it to 睡眠正常.
-    expect(meaningful.upsert).toEqual({ notes: '  睡眠正常  ' });
-
-    // Whitespace-only notes count as empty: they do not make the form
-    // meaningful and are therefore not submitted at all.
-    const blank = buildDailyStatusUpsert({ ...dailyStatusFormState(null), notes: '   ' });
-    expect(blank.upsert).toBeNull();
-    expect(blank.error).toBeNull();
+    expect(error).toBeNull();
+    expect(upsert).toMatchObject({ notes: '  睡眠正常  ' });
+    expect(dailyStatusUpsertSchema.parse(upsert)).toMatchObject({ notes: '睡眠正常' });
   });
 
   it('returns upsert null without error for a fully empty form', () => {
     const { upsert, error } = buildDailyStatusUpsert(dailyStatusFormState(null));
     expect(upsert).toBeNull();
     expect(error).toBeNull();
+    // A whitespace-only note does not make the form meaningful either.
+    const blankNotes = buildDailyStatusUpsert({ ...dailyStatusFormState(null), notes: '   ' });
+    expect(blankNotes.upsert).toBeNull();
+    expect(blankNotes.error).toBeNull();
   });
 });
