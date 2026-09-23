@@ -293,10 +293,11 @@ function WeeklyTargetCard({
     queryKey: ['calendar-plan', window.rangeFrom, window.rangeTo],
     queryFn: () => getCalendarRange({ from: window.rangeFrom, to: window.rangeTo }),
   });
-  // The real distance is only computed from a response that matches the
-  // requested window — a pending or failed calendar request is never treated
-  // as "0 km".
-  const calendarReady = query.data !== undefined && query.data.from === window.rangeFrom;
+  // The real distance is only computed from a SUCCESSFUL response that
+  // matches the requested window. A failed refetch (even with the previous
+  // success still cached for the same window) must surface the error alone —
+  // the stale numbers are never shown alongside it as if they were current.
+  const calendarReady = query.isSuccess && query.data.from === window.rangeFrom;
   const hasTarget = settingsStatus === 'ready' && targetMeters != null;
   const percent =
     hasTarget && calendarReady

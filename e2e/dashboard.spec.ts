@@ -316,3 +316,66 @@ test('dashboard daily cards degrade locally when their APIs fail', async ({ page
 
   expect(pageErrors).toEqual([]);
 });
+
+test('weekly card shows an error instead of stale numbers when a cached refetch fails', async ({
+  page,
+}) => {
+  await page.goto('/settings');
+  await page.getByLabel('每周跑量目标（km）').fill('50');
+  await page.getByRole('button', { name: '保存档案' }).click();
+  await expect(page.getByText('运动员档案已保存。')).toBeVisible();
+
+  // First load succeeds: the card shows the real numbers for the window.
+  await page.goto('/');
+  const weeklyCard = page.getByTestId('dashboard-weekly-card');
+  await expect(weeklyCard).toContainText('周目标 50.00 km');
+  await expect(weeklyCard.getByTestId('dashboard-weekly-actual')).toBeVisible();
+  await expect(weeklyCard.getByRole('progressbar')).toBeVisible();
+
+  // From here on every calendar request fails; a client-side round trip
+  // remounts the card and forces a refetch of the cached query.
+  await page.route('**/api/calendar*', (route) => route.abort());
+  await page.getByRole('link', { name: '趋势' }).click();
+  await expect(page.getByRole('heading', { name: '趋势' })).toBeVisible();
+  await page.getByRole('link', { name: '概览' }).click();
+
+  // The error takes precedence: the previous numbers and the progress bar
+  // must not be shown as if they were still current.
+  await expect(weeklyCard).toContainText('本周跑量数据加载失败', { timeout: 20_000 });
+  await expect(weeklyCard.getByTestId('dashboard-weekly-actual')).toHaveCount(0);
+  await expect(weeklyCard.getByText('已完成', { exact: true })).toHaveCount(0);
+  await expect(weeklyCard.getByRole('progressbar')).toHaveCount(0);
+  await expect(weeklyCard).not.toContainText('周目标 50.00 km');
+});
+
+test('weekly progress keeps the real text percentage but caps the bar at 100', async ({ page }) => {
+  // Canonical today comes from the dashboard itself; a real RUN activity is
+  // imported on that date through the normal CSV flow, so the current week
+  // always contains a positive distance no matter when the test runs.
+  await page.goto('/');
+  const today = (await page.getByTestId('dashboard-today-date').textContent())?.trim() ?? '';
+  expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  await page.goto('/imports');
+  await page.getByLabel('导入活动 CSV').setInputFiles({
+    name: 'today.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(
+      `活动类型,日期,标题,距离,时间\n跑步,${today} 08:00:00,本周合成跑步,3.00,00:20:00\n`,
+    ),
+  });
+  await page.getByRole('button', { name: '开始导入' }).first().click();
+
+  // A 1-meter target makes any real distance exceed 100%.
+  await page.goto('/settings');
+  await page.getByLabel('每周跑量目标（km）').fill('0.001');
+  await page.getByRole('button', { name: '保存档案' }).click();
+  await expect(page.getByText('运动员档案已保存。')).toBeVisible();
+
+  await page.goto('/');
+  const weeklyCard = page.getByTestId('dashboard-weekly-card');
+  await expect(weeklyCard.getByTestId('dashboard-weekly-actual')).toBeVisible();
+  await expect(weeklyCard.getByTestId('dashboard-weekly-percent')).toContainText(/已完成 \d{3,}%/);
+  const bar = weeklyCard.getByRole('progressbar', { name: '本周跑量目标完成进度' });
+  await expect(bar).toHaveAttribute('aria-valuenow', '100');
+  await expect(bar.locator('div').first()).toHaveAttribute('style', /width:\s*100%/);
+});
