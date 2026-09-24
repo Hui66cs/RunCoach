@@ -23,11 +23,25 @@ import type {
   TrendsResponse,
 } from '@runcoach/shared';
 
+/** Request failure carrying the server's error code (e.g. AI_CONTEXT_STALE). */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export async function request<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(body?.message ?? `请求失败：${response.status}`);
+    const body = (await response.json().catch(() => null)) as {
+      message?: string;
+      code?: string;
+    } | null;
+    throw new ApiError(body?.message ?? `请求失败：${response.status}`, body?.code ?? 'UNKNOWN');
   }
   return (await response.json()) as T;
 }

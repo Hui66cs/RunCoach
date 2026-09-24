@@ -22,6 +22,8 @@ test('preview-only flow with AI disabled: entering, switching the window, and le
   await expect(page.getByText(/仅这些数值汇总/)).toBeVisible();
   await expect(page.getByText(/将发送到 DeepSeek/)).toBeVisible();
   await expect(page.getByText(/跑步汇总（28 天）/)).toBeVisible();
+  await expect(page.getByText('执行率基数（已完成+已跳过+已逾期）')).toBeVisible();
+  await expect(page.getByTestId('review-raw-context')).toContainText('"eligibleCount"');
 
   // Confirming is impossible while the integration is disabled.
   await expect(page.getByTestId('review-confirm')).toBeDisabled();

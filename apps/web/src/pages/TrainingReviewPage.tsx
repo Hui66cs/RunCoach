@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiReviewResponse, AiTrainingContext } from '@runcoach/shared';
-import { getAiContextPreview, requestAiReview } from '../api.js';
+import { ApiError, getAiContextPreview, requestAiReview } from '../api.js';
 import { formatDistance, formatDuration, formatPace } from '../format.js';
 
 type WindowDays = 7 | 28;
@@ -47,6 +47,10 @@ function ContextDetails({ context }: { context: AiTrainingContext }) {
         <StatRow label="已逾期" value={`${context.planSummary.overdueCount}`} />
         <StatRow label="未到期" value={`${context.planSummary.upcomingCount}`} />
         <StatRow
+          label="执行率基数（已完成+已跳过+已逾期）"
+          value={`${context.planSummary.eligibleCount}`}
+        />
+        <StatRow
           label="执行率"
           value={
             context.planSummary.adherenceRate === null
@@ -71,6 +75,17 @@ function ContextDetails({ context }: { context: AiTrainingContext }) {
           </ul>
         </section>
       )}
+      <details className="md:col-span-2">
+        <summary className="cursor-pointer text-xs text-slate-400">
+          原始上下文 JSON（与实际发送给模型的内容完全一致）
+        </summary>
+        <pre
+          className="mt-2 overflow-x-auto rounded bg-slate-950 p-3 text-xs text-slate-300"
+          data-testid="review-raw-context"
+        >
+          {JSON.stringify(context, null, 2)}
+        </pre>
+      </details>
     </div>
   );
 }
@@ -90,6 +105,16 @@ export function TrainingReviewPage() {
       requestAiReview({ windowDays, contextFingerprint: fingerprint }),
     onSuccess: (result, fingerprint) => {
       setConfirmed({ fingerprint, result });
+    },
+    onError: (error) => {
+      // A stale-context rejection invalidates the confirmed fingerprint: clear
+      // any state and re-fetch the preview in-page so the user can check the
+      // new context and explicitly confirm again (no automatic provider call).
+      // Other failures (429 etc.) keep the per-click retry behaviour.
+      if (error instanceof ApiError && error.code === 'AI_CONTEXT_STALE') {
+        setConfirmed(null);
+        void queryClient.invalidateQueries({ queryKey: ['ai-context', windowDays] });
+      }
     },
   });
 
@@ -112,7 +137,15 @@ export function TrainingReviewPage() {
 
   const fingerprint = preview.data?.contextFingerprint ?? null;
   const aiEnabled = preview.data?.aiEnabled === true;
-  const canConfirm = preview.isSuccess && aiEnabled && fingerprint !== null && !review.isPending;
+  // isFetching also disables confirming while a re-preview (e.g. after a 409
+  // stale rejection) is in flight, so the old fingerprint can never be sent
+  // again; the refreshed context always requires a fresh explicit click.
+  const canConfirm =
+    preview.isSuccess &&
+    !preview.isFetching &&
+    aiEnabled &&
+    fingerprint !== null &&
+    !review.isPending;
 
   const confirm = () => {
     if (!canConfirm || fingerprint === null) return;
@@ -219,21 +252,30 @@ export function TrainingReviewPage() {
             >
               {review.isPending ? '正在请求 AI 回顾…' : '确认并发送到 DeepSeek'}
             </button>
-            {review.isError && (
-              <span className="text-sm text-red-300" data-testid="review-error">
-                {review.error.message}
-              </span>
-            )}
-            {review.isError && (
-              <button
-                type="button"
-                onClick={confirm}
-                disabled={!canConfirm}
-                className="rounded border border-slate-600 px-3 py-1.5 text-sm disabled:opacity-50"
-              >
-                重试
-              </button>
-            )}
+            {review.isError &&
+              !(review.error instanceof ApiError && review.error.code === 'AI_CONTEXT_STALE') && (
+                <span className="text-sm text-red-300" data-testid="review-error">
+                  {review.error.message}
+                </span>
+              )}
+            {review.isError &&
+              review.error instanceof ApiError &&
+              review.error.code === 'AI_CONTEXT_STALE' && (
+                <span className="text-sm text-amber-300" data-testid="review-stale-recovery">
+                  训练上下文已变化，已在页面内重新获取预览，请检查新内容后再次确认。
+                </span>
+              )}
+            {review.isError &&
+              !(review.error instanceof ApiError && review.error.code === 'AI_CONTEXT_STALE') && (
+                <button
+                  type="button"
+                  onClick={confirm}
+                  disabled={!canConfirm}
+                  className="rounded border border-slate-600 px-3 py-1.5 text-sm disabled:opacity-50"
+                >
+                  重试
+                </button>
+              )}
           </div>
         </section>
       )}

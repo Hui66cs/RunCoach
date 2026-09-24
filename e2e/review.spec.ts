@@ -15,6 +15,12 @@ test('failure surfaces a readable error and retry succeeds', async ({ page }) =>
   await expect(page.getByText('将发送的上下文（只读预览）')).toBeVisible();
   await expect(page.getByTestId('review-ai-enabled')).toHaveText('AI 回顾已启用');
 
+  // The preview carries the complete context, including eligibleCount, and
+  // the exact raw JSON that will be sent.
+  await expect(page.getByText('执行率基数（已完成+已跳过+已逾期）')).toBeVisible();
+  await expect(page.getByTestId('review-raw-context')).toContainText('"eligibleCount"');
+  await expect(page.getByTestId('review-raw-context')).toContainText('"windowStartLocalDate"');
+
   // First confirmation: the mock provider answers 429 once.
   await page.getByTestId('review-confirm').click();
   await expect(page.getByTestId('review-error')).toHaveText('AI 服务请求过于频繁，请稍后再试');
@@ -45,7 +51,7 @@ test('double clicks are guarded: one confirmation sends exactly one request', as
   expect(reviewRequests.count()).toBe(1);
 });
 
-test('a changed context after preview is rejected and requires a new confirmation', async ({
+test('a stale fingerprint is rejected in-page, re-previewed, and reconfirmed without reload', async ({
   page,
 }) => {
   const reviewRequests = trackReviewRequests(page);
@@ -59,21 +65,37 @@ test('a changed context after preview is rejected and requires a new confirmatio
     .textContent();
   const today = /~ (\d{4}-\d{2}-\d{2})/.exec(todayText ?? '')?.[1] ?? '';
   expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  await page.request.post('/api/planned-workouts', {
+  const created = await page.request.post('/api/planned-workouts', {
     data: { scheduledLocalDate: today, workoutType: 'EASY_RUN', title: '指纹变化测试' },
   });
+  const createdId = ((await created.json()) as { id: string }).id;
 
   // The server compares fingerprints and refuses the stale confirmation.
   await page.getByTestId('review-confirm').click();
-  await expect(page.getByTestId('review-error')).toHaveText('训练上下文已变化，请重新预览并确认');
+  await expect(page.getByTestId('review-stale-recovery')).toBeVisible();
   expect(reviewRequests.count()).toBe(1);
 
-  // A reload fetches a fresh preview; a new confirmation succeeds.
-  await page.reload();
-  await expect(page.getByText('将发送的上下文（只读预览）')).toBeVisible();
-  await page.getByTestId('review-confirm').click();
+  // In-page recovery: the preview is refetched (no reload, no page leave).
+  // While refetching, confirming stays disabled; the refreshed context
+  // includes the new plan count and requires a new explicit confirmation.
+  const confirm = page.getByTestId('review-confirm');
+  await expect(confirm).toBeEnabled({ timeout: 10_000 });
+  await expect(page.getByText(/统计窗口：\d{4}-\d{2}-\d{2} ~ \d{4}-\d{2}-\d{2}/)).toBeVisible();
+  const rawContext = await page.getByTestId('review-raw-context').textContent();
+  expect(rawContext).not.toBeNull();
+  const parsedContext = JSON.parse(rawContext!) as {
+    planSummary: { plannedCount: number };
+  };
+  expect(parsedContext.planSummary.plannedCount).toBeGreaterThanOrEqual(1);
+
+  // The new confirmation succeeds (one more review request in total).
+  await confirm.click();
   await expect(page.getByTestId('review-result')).toBeVisible({ timeout: 10_000 });
   expect(reviewRequests.count()).toBe(2);
+
+  // Cleanup: remove the plan this test created.
+  const deleted = await page.request.delete(`/api/planned-workouts/${createdId}`);
+  expect(deleted.ok()).toBe(true);
 });
 
 test('leaving without confirming sends nothing', async ({ page }) => {
