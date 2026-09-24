@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DashboardResponse, TrainingSummaryCounts } from '@runcoach/shared';
 import { MAX_AI_CONTEXT_DAYS, aiTrainingContextSchema } from '@runcoach/shared';
 import { buildAiTrainingContext } from '../src/services/ai/context.js';
-import { buildReviewUserPrompt } from '../src/services/ai/ai-review-service.js';
+import { buildReviewUserPrompt, reviewSystemPrompt } from '../src/services/ai/ai-review-service.js';
 import {
   AiProviderError,
   type AiCompletionRequest,
@@ -388,6 +388,105 @@ describe('DeepSeek review provider adapter', () => {
         timeoutMs: 1000,
       }),
     ).rejects.toMatchObject({ code: 'INVALID_OUTPUT' });
+  });
+});
+
+describe('review prompt factual interpretation rules (M6 Batch 3)', () => {
+  it('states the rolling-window rule and forbids fixed-period wording', () => {
+    expect(reviewSystemPrompt).toContain('滚动日期范围');
+    expect(reviewSystemPrompt).toContain('windowStartLocalDate');
+    expect(reviewSystemPrompt).toContain('windowEndLocalDate');
+    expect(reviewSystemPrompt).toContain('近 7 天');
+    expect(reviewSystemPrompt).toContain('近 28 天');
+    expect(reviewSystemPrompt).toContain('不得把滚动范围称为“本周”“本月”');
+  });
+
+  it('states the fully-contained natural-week rule and the meaning of an empty weeklyVolumes', () => {
+    expect(reviewSystemPrompt).toContain('完整落在窗口内的自然周');
+    expect(reviewSystemPrompt).toContain('weeklyVolumes 为空数组仅表示');
+    expect(reviewSystemPrompt).toContain('绝不代表这段时间没有跑步');
+    expect(reviewSystemPrompt).toContain('是否有跑步只依据 running 字段');
+  });
+
+  it('states the adherence denominator rule and the upcoming-plan exclusion', () => {
+    expect(reviewSystemPrompt).toContain(
+      'eligibleCount = completedCount + skippedCount + overdueCount',
+    );
+    expect(reviewSystemPrompt).toContain('adherenceRate = completedCount / eligibleCount');
+    expect(reviewSystemPrompt).toContain('暂无可计算执行率的计划');
+    expect(reviewSystemPrompt).toContain('不能被评价为未达标');
+  });
+
+  it('requires distinguishing zero, not-computable, and not-provided, and keeps prohibitions', () => {
+    expect(reviewSystemPrompt).toContain('“数据为 0”');
+    expect(reviewSystemPrompt).toContain('“该指标暂无可计算结果”');
+    expect(reviewSystemPrompt).toContain('“上下文未提供该信息”');
+    expect(reviewSystemPrompt).toContain('不编造训练变化、完成情况、比赛计划或个人背景');
+    expect(reviewSystemPrompt).toContain('医疗建议或诊断');
+    expect(reviewSystemPrompt).toContain('伤病风险判断');
+    expect(reviewSystemPrompt).toContain('未经用户请求调整或生成训练计划');
+  });
+
+  it('sends the actual rolling dates for a non-natural-week 7-day window', () => {
+    // 2026-09-23 is a Wednesday: the 7-day window crosses two natural weeks
+    // and is never a Monday-start week, so it must be described by its dates.
+    const context = buildAiTrainingContext({
+      windowDays: 7,
+      dashboard: makeDashboard(),
+      planSummary: makePlanSummary(),
+    });
+    expect(context.windowStartLocalDate).toBe('2026-09-17');
+    expect(context.windowEndLocalDate).toBe('2026-09-23');
+    const prompt = buildReviewUserPrompt(JSON.stringify(context));
+    expect(prompt).toContain('"windowStartLocalDate":"2026-09-17"');
+    expect(prompt).toContain('"windowEndLocalDate":"2026-09-23"');
+  });
+
+  it('lets the model separate an empty weeklyVolumes from no running at all', () => {
+    const context = buildAiTrainingContext({
+      windowDays: 7,
+      dashboard: makeDashboard({ weeklyVolumes: [] }),
+      planSummary: makePlanSummary(),
+    });
+    expect(context.weeklyVolumes).toEqual([]);
+    expect(context.running.runs).toBe(3);
+    const prompt = buildReviewUserPrompt(JSON.stringify(context));
+    expect(prompt).toContain('"weeklyVolumes":[]');
+    expect(prompt).toContain('"runs":3');
+  });
+
+  it('distinguishes a real zero in runs from missing data', () => {
+    const dashboard = makeDashboard();
+    dashboard.last7Days.runs = 0;
+    dashboard.last7Days.totalDistanceMeters = 0;
+    const context = buildAiTrainingContext({
+      windowDays: 7,
+      dashboard,
+      planSummary: makePlanSummary(),
+    });
+    const prompt = buildReviewUserPrompt(JSON.stringify(context));
+    expect(prompt).toContain('"runs":0');
+    expect(prompt).toContain('"totalDistanceMeters":0');
+  });
+
+  it('sends eligibleCount 0 and adherenceRate null verbatim for the no-plan case', () => {
+    const context = buildAiTrainingContext({
+      windowDays: 28,
+      dashboard: makeDashboard(),
+      planSummary: makePlanSummary({
+        plannedCount: 0,
+        completedCount: 0,
+        linkedCompletedCount: 0,
+        skippedCount: 0,
+        overdueCount: 0,
+        upcomingCount: 0,
+        eligibleCount: 0,
+        adherenceRate: null,
+      }),
+    });
+    const prompt = buildReviewUserPrompt(JSON.stringify(context));
+    expect(prompt).toContain('"eligibleCount":0');
+    expect(prompt).toContain('"adherenceRate":null');
   });
 });
 

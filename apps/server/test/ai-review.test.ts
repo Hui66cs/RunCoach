@@ -258,6 +258,12 @@ describe('AI review API (M6)', () => {
     expect(prompt).not.toContain('机密活动名称');
     expect(prompt).not.toContain('私密训练备注');
     expect(prompt).not.toContain('今日轻松跑');
+    // The model receives the factual interpretation rules with the context.
+    const systemPromptSent = provider.requests[0]?.systemPrompt ?? '';
+    expect(systemPromptSent).toContain('滚动日期范围');
+    expect(systemPromptSent).toContain('不得把滚动范围称为“本周”“本月”');
+    expect(systemPromptSent).toContain('绝不代表这段时间没有跑步');
+    expect(systemPromptSent).toContain('暂无可计算执行率的计划');
     // The response itself carries no forbidden fields either.
     const serialized = response.review.body;
     expect(serialized).not.toContain('机密活动名称');

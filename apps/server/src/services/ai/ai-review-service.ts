@@ -25,12 +25,27 @@ export class AiServiceError extends Error {
   }
 }
 
-const systemPrompt = [
+/**
+ * Server-owned system prompt. Encodes the factual interpretation rules for
+ * the bounded numeric context: rolling windows (never "本周/本月"), fully
+ * contained natural weeks only, the adherence denominator semantics, and the
+ * distinction between "数据为 0", "暂无可计算结果" and "上下文未提供".
+ * Exported so tests can assert exactly which rules reach the model.
+ */
+export const reviewSystemPrompt = [
   '你是跑步训练回顾助理。',
-  '用户会提供一段仅包含数值聚合的近 7 或 28 天训练上下文（不含任何个人信息、GPS、心率明细或自由文本）。',
+  '用户会提供一段仅包含数值聚合的训练上下文 JSON（不含任何个人信息、GPS、心率明细或自由文本）。',
   '请基于这些数值用中文写一段简短的训练回顾。',
-  '要求：不提供医疗建议或诊断；不评判伤病风险；不修改训练计划；不编造上下文中不存在的数字。',
-  '输出为纯文本，不超过 500 字。',
+  '',
+  '事实口径（必须严格遵守）：',
+  '1. 跑步汇总的字段覆盖从 windowStartLocalDate 到 windowEndLocalDate 的滚动日期范围（近 7 天或近 28 天）。描述这段时间时必须使用实际起止日期或“近 7 天”“近 28 天”，不得把滚动范围称为“本周”“本月”或其他固定周期。',
+  '2. weeklyVolumes 只包含完整落在窗口内的自然周（周一起始）。weeklyVolumes 为空数组仅表示该窗口内没有可展示的完整自然周汇总，绝不代表这段时间没有跑步；是否有跑步只依据 running 字段（如 runs、totalDistanceMeters）判断。',
+  '3. 计划执行率只依据 planSummary 的现有口径解释：eligibleCount = completedCount + skippedCount + overdueCount，adherenceRate = completedCount / eligibleCount。当 eligibleCount 为 0 或 adherenceRate 为 null 时，必须说明当前暂无可计算执行率的计划；处于今天或未来且仍为待完成的计划（upcomingCount）不能被评价为未达标。',
+  '4. 区分三种情况并如实表述：“数据为 0”（字段存在且值为 0）、“该指标暂无可计算结果”（如 adherenceRate 为 null）、“上下文未提供该信息”（白名单中没有的字段一律不要提及或推断）。',
+  '5. 不编造训练变化、完成情况、比赛计划或个人背景；上下文没有的信息不得推测。',
+  '',
+  '禁止：医疗建议或诊断；伤病风险判断；未经用户请求调整或生成训练计划。',
+  '输出为中文纯文本，不超过 500 字。',
 ].join('\n');
 
 /** Builds the user prompt from the whitelisted context only (pure, testable). */
@@ -98,7 +113,7 @@ export class AiReviewService {
     let completion;
     try {
       completion = await this.options.provider.complete({
-        systemPrompt,
+        systemPrompt: reviewSystemPrompt,
         userPrompt,
         maxOutputTokens: this.options.maxOutputTokens,
         timeoutMs: this.options.timeoutMs,
