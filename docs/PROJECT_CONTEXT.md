@@ -2,7 +2,7 @@
 
 > 建议落盘位置：`docs/PROJECT_CONTEXT.md`
 > 项目仓库：<https://github.com/Hui66cs/RunCoach>（默认分支为 `master`）
-> 当前基线：`master` 分支，当前里程碑 M6（有界训练上下文与 DeepSeek 服务端只读接入）；M1–M5 均已完成并冻结（M5 Batch 4 已验收），M6 Batch 1 已实现、等待 reviewer 验收。此前版本基于更早里程碑编写。
+> 当前基线：`master` 分支，当前里程碑 M6（有界训练上下文与 DeepSeek 服务端只读接入）；M1–M5 均已完成并冻结，M6 Batch 1 已验收（结论 PASS WITH FOLLOW-UP），Batch 2 已实现并返工、等待 reviewer 验收。此前版本基于更早里程碑编写。
 > 状态标记：**已实现**表示当前代码具备；**已决定、未实现**表示后续应遵守的设计；**不确定**表示必须重新查证，不能自行假设。
 
 ## 1. 项目总体目标
@@ -94,7 +94,7 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
 总体目标：在既有确定性聚合之上生成有界的训练上下文，并提供用户主动触发的服务端只读 AI 回顾（DeepSeek），作为最窄范围的 AI 接入。不生成训练计划、不调整训练、不做 readiness 评分、不自动发送任何数据。
 
 - M5 阶段收口：Batch 1–4 全部通过 reviewer 验收，M5 阶段完成。
-- M6 Batch 1 已实现（等待 reviewer 验收）：
+- M6 Batch 1 已验收（结论 PASS WITH FOLLOW-UP）：
   - `AiTrainingContext`（shared Zod schema）字段白名单：canonical `generatedForLocalDate`/`timezoneOffsetMinutes`、`windowDays`（7 或 28）、闭区间 `windowStartLocalDate`/`windowEndLocalDate`、对应窗口的 dashboard 7/28 天跑步汇总（次数、总距离、总移动时长、平均配速）、**完整落在窗口内**的周一起始周汇总（与窗口仅部分相交的边界周直接丢弃而非裁剪，保证任何发送数值都不含窗口外日期）、training-summary 计数。结构性排除：原始导入、samples、GPS、每日状态量表、活动名称、自由文本备注、档案文本、任何密钥；注意跑步数据本身可能被视为健康相关信息，是否发送由用户自行判断。
   - `POST /api/ai/context`：只读预览端点，返回 `aiContextPreviewResponseSchema`（`context`、`aiEnabled`、`contextFingerprint`，后者为上下文稳定 JSON 的 SHA-256）；与 review 走同一构建路径但**绝不调用 provider**，且在 AI 未启用时仍可访问。
   - `POST /api/ai/review`：仅由用户主动触发；请求体 `aiReviewRequestSchema`（`windowDays: 7|28`，默认 28 + **必填 `contextFingerprint`**）；服务端重算指纹，与确认时的预览不一致即返回 409 `AI_CONTEXT_STALE` 且**不调用 provider**——数据或 canonical today 变化后必须重新预览并确认，绝不静默发送变化后的上下文；不保存任何长期授权状态。响应 `aiReviewResponseSchema`（context、review 1–4000 字符、model ≤100 字符、generatedAt）。上下文由 `getDashboard(today)` 与 `getTrainingSummary` 用同一 canonical today 组装；prompt 仅由上下文 JSON 服务端拼装。

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { AiReviewResponse, NormalizedActivity } from '@runcoach/shared';
 import { buildApp } from '../src/app.js';
@@ -21,7 +21,7 @@ import {
 import { ImportService } from '../src/services/import-service.js';
 import { RawFileStore } from '../src/storage/raw-file-store.js';
 
-const TODAY = '2026-09-23'; // Wednesday; canonical today injected everywhere.
+const TODAY = '2026-09-23'; // Wednesday; pinned as the canonical today via the fake clock below.
 const DEFAULT_OFFSET = 480;
 
 let sourceCounter = 0;
@@ -154,6 +154,15 @@ function rowCounts(harness: Harness): Record<string, number> {
 describe('AI review API (M6)', () => {
   let harness: Harness | undefined;
 
+  // The HTTP route derives canonical today from Date.now(); pinning only the
+  // clock (not timers) keeps every date assertion tied to the fixed
+  // 2026-09-23 fixtures regardless of the day the suite runs, and the real
+  // clock is restored afterwards.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-23T04:00:00.000Z')); // 2026-09-23 at UTC+8
+  });
+
   /** Preview-then-confirm flow: returns the fingerprint along with the
    * review response so tests exercise the real client contract. */
   async function confirmReview(
@@ -178,6 +187,7 @@ describe('AI review API (M6)', () => {
   }
 
   afterEach(async () => {
+    vi.useRealTimers();
     if (harness !== undefined) {
       await harness.app.close();
       harness.database.close();

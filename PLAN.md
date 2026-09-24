@@ -12,7 +12,7 @@ M6 (approved): bounded training context and a server-side, read-only DeepSeek re
 
 ### M6 scope and batches
 
-1. [x] Batch 1: bounded AI context and DeepSeek server-side read-only integration. **Implemented, awaiting reviewer acceptance.** Delivered:
+1. [x] Batch 1: bounded AI context and DeepSeek server-side read-only integration. **Stage-accepted (verdict: PASS WITH FOLLOW-UP).** Delivered:
    - `AiTrainingContext` (shared Zod schema): an explicit whitelist — canonical `generatedForLocalDate`/`timezoneOffsetMinutes`, `windowDays` (7 or 28), inclusive `windowStartLocalDate`/`windowEndLocalDate`, the matching dashboard 7/28-day run summary (runs, total distance/moving duration, average pace), Monday-start weekly volumes **fully contained** in the window (partial boundary weeks are dropped, never clipped, so no sent number covers out-of-window dates), and the training-summary counts. Structurally excludes raw imports, samples, GPS, heart rate, daily-status scales, activity names, notes, profile text, and secrets; note that running aggregates may still be regarded as health-related data, and whether to send them stays the user's own decision.
    - `POST /api/ai/review`: user-triggered only; body `{windowDays: 7|28}` (default 28) via `aiReviewRequestSchema`; response `aiReviewResponseSchema` (`context`, `review` trimmed 1–`MAX_AI_REVIEW_CHARS`(4000) chars, `model` ≤100 chars, `generatedAt`). Context is built from `getDashboard(today)` + `getTrainingSummary` with the same canonical today; the provider prompt is assembled server-side from the context JSON only.
    - `POST /api/ai/context`: read-only preview returning `aiContextPreviewResponseSchema` (`context`, `aiEnabled`) — built by the exact same code path as the review but never calls the provider, and works while the integration is disabled, so a future UI can show users precisely what would be sent and require an explicit confirmation step before calling `/api/ai/review`.
@@ -130,7 +130,7 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M5 Batch 2: `/settings` athlete profile form and `/daily-status` create/edit/delete page (reviewer-accepted).
 - [x] M5 Batch 3: Dashboard daily-loop integration (reviewer-accepted).
 - [x] M5 Batch 4: daily-loop regression closeout — cross-page React Query invalidation plus a full real-flow closed-loop E2E (reviewer-accepted; M5 stage-complete).
-- [x] M6 Batch 1: bounded training context and server-side read-only DeepSeek integration (implemented and reworked, awaiting reviewer acceptance).
+- [x] M6 Batch 1: bounded training context and server-side read-only DeepSeek integration (stage-accepted; verdict PASS WITH FOLLOW-UP).
 - [x] M6 Batch 2: 训练回顾页面、发送前确认与本地 mock provider E2E (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
 
 ## M2 implementation record
