@@ -129,7 +129,7 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
   - 卡片：个性化问候（你好，{displayName}，无姓名回退“概览”）+ 次要文本显示主要目标；今日状态（未记录 → “今天尚未记录状态” + 携带 canonical date 的记录入口；已记录 → 非空字段展示、null 显示“未填写”；请求失败仅卡片局部报错）；今日训练（当天全部计划：标题/类型/目标/完成状态 badge/关联活动链接；复杂修改留给日历页，“在日历中处理”链接到对应月份）；本周跑量（仅统计当前周一至周日内 `activityType === 'RUN'`、有效有限且 >0 的实际距离；有目标时显示实际/目标/百分比，文本可超 100% 但进度条宽度封顶 100%；未设置目标 → 前往设置，不自动生成）；近期计划（today 之后 7 个本地日内、仅 PLANNED、日期+标题+ID 确定性排序、最多 5 项，超出提供日历入口）。
   - 无实际活动时日常卡片仍然全部可见；既有 7/28 天统计、12 周趋势、导入引导与最近活动保持不变。
   - 不做：readiness/recovery 综合分、训练建议、医疗结论、自动计划调整。
-- Batch 4 已实现（等待 reviewer 验收）：日常闭环回归与阶段收口，仅修跨页面缓存刷新缺口并补闭环 E2E，不新增 endpoint/schema。
+- Batch 4 已验收：日常闭环回归与阶段收口，仅修跨页面缓存刷新缺口并补闭环 E2E，不新增 endpoint/schema（M5 阶段完成）。
   - 查询失效规则：Calendar 的 create/edit/delete/completion mutation 在原有 `['calendar']`、`['training-summary']` 之外，同步失效 `['calendar-plan']` 前缀（Dashboard 计划卡的查询键，按各自窗口键控）；CSV/FIT 导入与 pending resolve 在原有失效之外追加 `['dashboard']` 与 `['calendar-plan']`；DailyStatus 的 `['daily-status']` 与 Settings 的 `['settings']` 前缀本就覆盖 Dashboard 共享键，未改动。失败 mutation 不触发失效。
   - 闭环 E2E（真实 UI/API）：从 Dashboard 读 canonical today → Calendar 默认日期为 canonical today 创建今日计划 → 记录今日状态 → CSV 导入当日合成 RUN 活动 → Calendar 人工关联并完成 → Dashboard 显示已完成 badge、关联活动链接、状态卡与本周跑量 → reload 后仍在；期间验证关联冲突 409 不伪装成功；测试结束仅清理自建数据。
 
