@@ -1,6 +1,6 @@
 # RunCoach Local
 
-RunCoach Local is a single-user, local-first running activity manager. M1/M1.1 provide durable CSV/FIT import and canonical merging. M2 adds formal activity browsing, bounded time-series retrieval, deterministic single-run analysis, and local athlete settings. M3 adds the Dashboard homepage and 12/26/52-week cross-activity trends. M4 adds the training calendar, planned workouts, plan completion status, manual plan-to-activity links, and adherence rollups. M5 adds athlete profile fields, the daily-status page, and the Dashboard daily loop (today's status, today's plans, weekly distance) that connects recording status, importing activities, and completing/ linking plans in the calendar. Everything runs and stays on this machine.
+RunCoach Local is a single-user, local-first running activity manager. M1/M1.1 provide durable CSV/FIT import and canonical merging. M2 adds formal activity browsing, bounded time-series retrieval, deterministic single-run analysis, and local athlete settings. M3 adds the Dashboard homepage and 12/26/52-week cross-activity trends. M4 adds the training calendar, planned workouts, plan completion status, manual plan-to-activity links, and adherence rollups. M5 adds athlete profile fields, the daily-status page, and the Dashboard daily loop (today's status, today's plans, weekly distance) that connects recording status, importing activities, and completing/ linking plans in the calendar. M6 adds the only AI feature: a read-only training review page that shows exactly which numeric aggregates would be sent and requires a per-send confirmation before the optional, locally configured DeepSeek call. Everything else runs and stays on this machine.
 
 ## Requirements
 
@@ -68,6 +68,7 @@ The UI has Activity, Pending, and Import History views. Medium-confidence FIT ma
 - `/calendar`: monthly training calendar with planned workouts, completion status (待完成/已完成/已跳过/已逾期), manual plan-to-activity links, and monthly/weekly adherence.
 - `/daily-status`: private, local daily self-report (sleep, fatigue, muscle soreness, stress, motivation on 1–5 scales, resting heart rate, notes) with per-date create/edit/delete; no medical conclusions and no training advice.
 - `/trends`: 12/26/52-week cross-activity volume, pace, and heart-rate trends.
+- `/review`: optional AI training review. It previews the exact bounded numeric context (window dates, run summaries, weekly volumes, plan counts — never raw imports, GPS, heart-rate details, daily status, or notes), and only sends it to the locally configured DeepSeek endpoint after you explicitly confirm each request. The reply is labelled AI 生成 with the model name and is informational only — not a training plan, chat coach, or medical advice. Disabled unless the server operator sets `RUNCOACH_AI_ENABLED=true` with a DeepSeek key in the local `.env`.
 - `/imports`: the complete M1.1 upload, pending-resolution, and history loop.
 - `/settings`: local athlete heart-rate and timezone settings used by deterministic analysis, plus the athlete profile editor (name, experience level, primary goal, weekly distance target in km, stored as meters).
 
@@ -77,6 +78,6 @@ Charts render pace on a dedicated inverted `min/km` axis. Acceptance results, AP
 
 ## Current limitations
 
-- No AI coach, automatic training suggestions, readiness/recovery scores, medical conclusions, ParroTao online sync, watch/Garmin Connect writes, authentication, backup/restore, online map, or cloud services.
+- No AI coach, automatic training suggestions or automatic sending, readiness/recovery scores, medical conclusions, chat/memory features, ParroTao online sync, watch/Garmin Connect writes, authentication, backup/restore, online map, or cloud services. The single AI feature is the `/review` read-only training review above, which fires only on explicit per-request confirmation.
 - A source system without an activity ID cannot distinguish two activities of the same type starting in the same UTC second. A collision within one CSV is rejected explicitly.
 - Distribution is not supported because the selected Garmin FIT SDK has license restrictions that require review before redistribution.
