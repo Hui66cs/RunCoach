@@ -25,6 +25,11 @@ test('preview-only flow with AI disabled: entering, switching the window, and le
   await expect(page.getByText('执行率基数（已完成+已跳过+已逾期）')).toBeVisible();
   await expect(page.getByTestId('review-raw-context')).toContainText('"eligibleCount"');
 
+  // The deterministic data hints work without AI enabled and never send.
+  await expect(page.getByTestId('review-data-hints')).toBeVisible();
+  await expect(page.getByTestId('review-data-hints')).toContainText('没有跑步记录');
+  await expect(page.getByTestId('review-data-hints')).toContainText('你仍可自行确认发送');
+
   // Confirming is impossible while the integration is disabled.
   await expect(page.getByTestId('review-confirm')).toBeDisabled();
   await expect(page.getByTestId('review-disabled-hint')).toContainText('AI 回顾未在服务端启用');

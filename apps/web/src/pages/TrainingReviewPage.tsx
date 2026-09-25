@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiReviewResponse, AiTrainingContext } from '@runcoach/shared';
 import { ApiError, getAiContextPreview, requestAiReview } from '../api.js';
 import { formatDistance, formatDuration, formatPace } from '../format.js';
+import { reviewDataHints } from '../review-hints.js';
 
 type WindowDays = 7 | 28;
 
@@ -135,6 +136,10 @@ export function TrainingReviewPage() {
       preview.data === undefined ||
       preview.data.contextFingerprint !== confirmed.fingerprint);
 
+  // Deterministic pre-send hints, always derived from the currently displayed
+  // preview context: switching the window or refetching updates them with the
+  // new context and they never trigger a model call.
+  const dataHints = preview.data === undefined ? [] : reviewDataHints(preview.data.context);
   const fingerprint = preview.data?.contextFingerprint ?? null;
   const aiEnabled = preview.data?.aiEnabled === true;
   // isFetching also disables confirming while a re-preview (e.g. after a 409
@@ -223,6 +228,22 @@ export function TrainingReviewPage() {
             {preview.data.context.timezoneOffsetMinutes >= 0 ? '+' : ''}
             {preview.data.context.timezoneOffsetMinutes / 60}）
           </p>
+          {dataHints.length > 0 && (
+            <div
+              className="mb-4 rounded-lg border border-sky-800/60 bg-sky-950/30 p-3 text-sm text-sky-200"
+              data-testid="review-data-hints"
+            >
+              <p className="mb-1 font-medium">本次可回顾数据</p>
+              <ul className="list-disc space-y-1 pl-5">
+                {dataHints.map((hint) => (
+                  <li key={hint}>{hint}</li>
+                ))}
+              </ul>
+              <p className="mt-1 text-xs text-sky-300/80">
+                以上为确定性提示，仅基于本次预览的数值；你仍可自行确认发送。
+              </p>
+            </div>
+          )}
           <p className="mb-4 rounded-lg border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-200">
             确认后，以下<b>仅这些数值汇总</b>将发送到 DeepSeek
             云端接口：跑步距离/时长/配速、完整周汇总与计划完成计数。不包含原始导入文件、GPS

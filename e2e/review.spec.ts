@@ -105,3 +105,49 @@ test('leaving without confirming sends nothing', async ({ page }) => {
   await page.goto('/');
   expect(reviewRequests.count()).toBe(0);
 });
+
+test('sparse-data hints follow the current preview and never block a confirmed send', async ({
+  page,
+}) => {
+  const reviewRequests = trackReviewRequests(page);
+  await page.goto('/review');
+  const hints = page.getByTestId('review-data-hints');
+  await expect(hints).toBeVisible();
+  await expect(hints).toContainText('没有跑步记录');
+  await expect(hints).toContainText('没有可计算的计划执行率');
+  expect(reviewRequests.count()).toBe(0);
+
+  // Hints carry the actual window dates and follow a window switch.
+  const beforeText = (await hints.textContent()) ?? '';
+  const beforeStart =
+    /统计窗口（(\d{4}-\d{2}-\d{2}) ~ \d{4}-\d{2}-\d{2}）/.exec(beforeText)?.[1] ?? '';
+  expect(beforeStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  await page.getByRole('button', { name: '近 7 天' }).click();
+  await expect(hints).not.toContainText(beforeStart);
+  await expect(hints).toContainText(/内没有跑步记录/);
+  expect(reviewRequests.count()).toBe(0);
+
+  // Upcoming plans are reported as not-yet-due, never as missed.
+  const summaryText =
+    (await page.getByText(/统计窗口：\d{4}-\d{2}-\d{2} ~ (\d{4}-\d{2}-\d{2})/).textContent()) ?? '';
+  const today = /~ (\d{4}-\d{2}-\d{2})/.exec(summaryText)?.[1] ?? '';
+  expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  const created = await page.request.post('/api/planned-workouts', {
+    data: { scheduledLocalDate: today, workoutType: 'EASY_RUN', title: '提示测试计划' },
+  });
+  const createdId = ((await created.json()) as { id: string }).id;
+  await page.reload();
+  const hintsAfterReload = page.getByTestId('review-data-hints');
+  await expect(hintsAfterReload).toContainText('尚未到期的计划');
+  await expect(hintsAfterReload).not.toContainText('未完成');
+  await expect(hintsAfterReload).not.toContainText('未达标');
+
+  // The hints never block sending: an explicit confirmation still fires once.
+  await page.getByTestId('review-confirm').click();
+  await expect(page.getByTestId('review-result')).toBeVisible({ timeout: 10_000 });
+  expect(reviewRequests.count()).toBe(1);
+
+  // Cleanup: remove the plan this test created.
+  const deleted = await page.request.delete(`/api/planned-workouts/${createdId}`);
+  expect(deleted.ok()).toBe(true);
+});

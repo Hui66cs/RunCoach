@@ -105,7 +105,8 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
   - 配置：`RUNCOACH_AI_ENABLED` + `RUNCOACH_AI_PROVIDER=deepseek` + 非空 `RUNCOACH_DEEPSEEK_API_KEY` 三者同时满足才启用真实调用，默认禁用；空/空白 key 视为未配置，不会阻止服务启动。`.env.example` 注明 DeepSeek 条款允许在去标识化前提下将输入输出用于模型优化、服务端启用开关不等于用户已完成发送前确认，且跑步数据可能被视为健康相关信息。
   - 稳定且脱敏的错误：503 `AI_DISABLED`、400 `INVALID_AI_REVIEW_REQUEST`、504 `AI_TIMEOUT`、429 `AI_RATE_LIMITED`、502 `AI_PROVIDER_ERROR`/`AI_EMPTY_RESPONSE`/`AI_INVALID_OUTPUT`；上游响应体、key、本地路径不出现在任何客户端消息中；任何失败路径都不写 SQLite；不新增聊天记录表。
   - 本批不做：前端回顾 UI（后续 Batch 需另行批准）、更多 LLM provider、聊天/记忆功能、自动发送、AI 计划生成。
-  - Batch 3（已实现，等待 reviewer 验收）：仅改进服务端系统提示词 `reviewSystemPrompt` 的事实口径——滚动窗口（用实际起止日期或“近 7 天/近 28 天”表述，禁止“本周/本月”）、`weeklyVolumes` 仅含完整自然周（空数组不代表没有跑步，以 `running` 字段判断）、执行率仅按 `eligibleCount/completedCount/adherenceRate` 口径（eligible 为 0 时说明暂无可计算执行率的计划，今天及未来待完成不算未达标）、要求区分“数据为 0/暂无可计算/上下文未提供”并不编造；医疗与伤病禁令保留。不改变 context 字段白名单、API contract 或确认流程；确定性测试断言提示词规则与四类边界事实。
+  - Batch 3（已验收，结论 PASS WITH FOLLOW-UP）：仅改进服务端系统提示词 `reviewSystemPrompt` 的事实口径——滚动窗口（用实际起止日期或“近 7 天/近 28 天”表述，禁止“本周/本月”）、`weeklyVolumes` 仅含完整自然周（空数组不代表没有跑步，以 `running` 字段判断）、执行率仅按 `eligibleCount/completedCount/adherenceRate` 口径（eligible 为 0 时说明暂无可计算执行率的计划，今天及未来待完成不算未达标）、要求区分“数据为 0/暂无可计算/上下文未提供”并不编造；医疗与伤病禁令保留。不改变 context 字段白名单、API contract 或确认流程；确定性测试断言提示词规则与四类边界事实。
+  - Batch 4（已实现，等待 reviewer 验收）：`/review` 预览面板新增确定性“本次可回顾数据”提示（`apps/web/src/review-hints.ts`，纯函数 + 单测）：runs 为 0 → 如实说明窗口内没有跑步记录；eligible 为 0 且 adherenceRate 为 null → 说明没有可计算的计划执行率，尚未到期的计划不属于未完成或未达标；有跑步但 weeklyVolumes 为空 → 只说明窗口内没有完整自然周汇总，绝不表述为缺少跑步数据；无跑步且无可评估计划时提醒 AI 回顾可能主要概述已有数字（克制表述，不推断训练水平/健康/伤病）。提示始终依据当前展示的预览上下文（切换窗口/重取/指纹变化自动更新），绝不触发 `/api/ai/review`，也不阻止用户显式确认发送。E2E 在启用与禁用项目均覆盖；不改变发送字段、API、schema 或 migration。
 
 - Batch 1 已通过 reviewer 验收：运动员档案字段与每日状态的数据/API 基础，本批不含任何前端。
   - `0005_daily_training_context.sql`（forward-only，不改 0000–0004；重复执行幂等）：
