@@ -3,7 +3,9 @@ import { loadConfig } from './config.js';
 import { openDatabase } from './db/client.js';
 import { applyMigrations, resolveMigrationsDirectory } from './db/migrate.js';
 import { ActivityRepository } from './repositories/activity-repository.js';
+import { ChatRepository } from './repositories/chat-repository.js';
 import { AiReviewService } from './services/ai/ai-review-service.js';
+import { CoachChatService } from './services/ai/coach-chat-service.js';
 import { createAiKeysRuntime } from './services/ai/key-runtime.js';
 import { DeepSeekReviewProvider } from './services/ai/deepseek-provider.js';
 import type { TrainingReviewProvider } from './services/ai/provider.js';
@@ -47,7 +49,22 @@ const aiKeys = createAiKeysRuntime({
   aiReview,
 });
 
-const app = await buildApp({ config, repository, importService, aiReview, aiKeys });
+const chatRepository = new ChatRepository(database.db);
+const coachChat = new CoachChatService(repository, chatRepository, () => aiReview.getActive(), {
+  timeoutMs: config.ai.timeoutMs,
+  maxOutputTokens: config.ai.maxOutputTokens,
+  historyTurns: 20,
+});
+
+const app = await buildApp({
+  config,
+  repository,
+  importService,
+  aiReview,
+  aiKeys,
+  chatRepository,
+  coachChat,
+});
 
 const shutdown = async () => {
   await app.close();

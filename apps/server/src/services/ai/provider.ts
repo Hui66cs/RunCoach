@@ -18,11 +18,18 @@ export class AiProviderError extends Error {
   }
 }
 
+export interface AiHistoryTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface AiCompletionRequest {
   /** Fixed server-owned instruction text; never contains user free text. */
   systemPrompt: string;
   /** The bounded whitelist context serialized by the service. */
   userPrompt: string;
+  /** Optional bounded prior conversation turns (oldest first, chat only). */
+  history?: AiHistoryTurn[];
   maxOutputTokens: number;
   timeoutMs: number;
 }

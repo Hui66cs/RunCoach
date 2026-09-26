@@ -264,6 +264,33 @@ export const dailyStatusEntries = sqliteTable(
   (table) => [uniqueIndex('daily_status_entries_local_date_uq').on(table.localDate)],
 );
 
+// M7 Batch 2: persistent conversational coach storage (single user; the chat
+// history is user-editable data, not an immutable import source).
+export const chatSessions = sqliteTable(
+  'chat_sessions',
+  {
+    id: text('id').primaryKey(),
+    title: text('title').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('chat_sessions_updated_idx').on(table.updatedAt)],
+);
+
+export const chatMessages = sqliteTable(
+  'chat_messages',
+  {
+    id: text('id').primaryKey(),
+    sessionId: text('session_id')
+      .notNull()
+      .references(() => chatSessions.id, { onDelete: 'cascade' }),
+    role: text('role').notNull(),
+    content: text('content').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [index('chat_messages_session_idx').on(table.sessionId, table.createdAt)],
+);
+
 export const plannedWorkouts = sqliteTable(
   'planned_workouts',
   {

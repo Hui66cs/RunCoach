@@ -24,7 +24,11 @@ export default defineConfig({
       testMatch: /daily-status\.spec\.ts/,
       use: { baseURL: 'http://127.0.0.1:5188' },
     },
-    { name: 'review', testMatch: /review\.spec\.ts/, use: { baseURL: 'http://127.0.0.1:5189' } },
+    {
+      name: 'review',
+      testMatch: [/review\.spec\.ts/, /coach\.spec\.ts/],
+      use: { baseURL: 'http://127.0.0.1:5189' },
+    },
     {
       name: 'review-disabled',
       testMatch: /review-disabled\.spec\.ts/,

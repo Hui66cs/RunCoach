@@ -931,3 +931,55 @@ export const aiCoachContextResponseSchema = z.object({
   aiEnabled: z.boolean(),
 });
 export type AiCoachContextResponse = z.infer<typeof aiCoachContextResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Conversational coach (M7 Batch 2): persistent multi-turn chat. History is
+// stored server-side in SQLite and only a bounded window travels with each
+// request; every request is user-triggered.
+// ---------------------------------------------------------------------------
+
+export const MAX_CHAT_MESSAGE_CHARS = 2000;
+export const MAX_CHAT_HISTORY_TURNS = 20;
+
+export const aiChatRequestSchema = z.strictObject({
+  message: z.string().trim().min(1).max(MAX_CHAT_MESSAGE_CHARS),
+  sessionId: z.string().uuid().optional(),
+});
+export type AiChatRequest = z.infer<typeof aiChatRequestSchema>;
+
+export const aiChatResponseSchema = z.object({
+  sessionId: z.string().uuid(),
+  sessionTitle: z.string().min(1).max(80),
+  reply: z.string().trim().min(1).max(MAX_AI_REVIEW_CHARS),
+  model: z.string().trim().min(1).max(100),
+  createdAt: z.iso.datetime(),
+});
+export type AiChatResponse = z.infer<typeof aiChatResponseSchema>;
+
+export const chatSessionSummarySchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().min(1).max(80),
+  createdAt: z.iso.datetime(),
+  updatedAt: z.iso.datetime(),
+  messageCount: z.number().int().nonnegative(),
+});
+export type ChatSessionSummary = z.infer<typeof chatSessionSummarySchema>;
+
+export const chatSessionListSchema = z.object({
+  sessions: z.array(chatSessionSummarySchema),
+});
+export type ChatSessionList = z.infer<typeof chatSessionListSchema>;
+
+export const chatMessageViewSchema = z.object({
+  id: z.string().uuid(),
+  role: z.enum(['user', 'assistant']),
+  content: z.string().min(1),
+  createdAt: z.iso.datetime(),
+});
+export type ChatMessageView = z.infer<typeof chatMessageViewSchema>;
+
+export const chatMessagesResponseSchema = z.object({
+  sessionId: z.string().uuid(),
+  messages: z.array(chatMessageViewSchema),
+});
+export type ChatMessagesResponse = z.infer<typeof chatMessagesResponseSchema>;

@@ -43,6 +43,10 @@ export class DeepSeekReviewProvider implements TrainingReviewProvider {
           model: this.options.model,
           messages: [
             { role: 'system', content: request.systemPrompt },
+            ...(request.history ?? []).map((turn) => ({
+              role: turn.role,
+              content: turn.content,
+            })),
             { role: 'user', content: request.userPrompt },
           ],
           max_tokens: request.maxOutputTokens,

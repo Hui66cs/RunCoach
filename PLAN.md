@@ -47,7 +47,12 @@ The owner approved expanding the AI scope (M6 Batch 5 rework discussion, 2026-09
    - `GET /api/ai/coach-context`: read-only, deterministic, never calls the provider, works while disabled; response `{context, aiEnabled}`. Structurally excludes names, notes on activities, GPS, samples, device info.
    - `/review` shows the coach context in an expandable, clearly labelled panel ("AI 助手上下文预览") with a sensitivity note about daily status/notes.
    - Tests: empty-database shape, PB boundaries incl. non-RUN exclusion, whitelist/bounding (65 activities → 60 + total), daily-status window inclusion.
-2. [ ] Batch 2: persistent conversational coach (SQLite chat sessions/messages migration, bounded history, `/coach` page).
+2. [x] Batch 2: persistent conversational coach. **Implemented, awaiting reviewer acceptance.** Delivered:
+   - `0006_ai_chat.sql` (forward-only): `chat_sessions` + `chat_messages` (role CHECK, `ON DELETE CASCADE`, session/updated indexes); single-user, no athlete columns.
+   - `ChatRepository` (sessions CRUD, bounded recent-messages window) and `CoachChatService`: each user message snapshots the deterministic coach context (same builder as Batch 1), sends [rules+context] + last `MAX_CHAT_HISTORY_TURNS` (20) messages + the new message to the provider, persists both turns; unknown session → 404 `SESSION_NOT_FOUND`.
+   - APIs: `POST /api/ai/coach/chat`, `GET /api/ai/coach/chat/sessions`, `GET .../sessions/:sessionId/messages`, `DELETE .../sessions/:sessionId` (204/404). Zod-validated (`aiChatRequestSchema`, replies ≤ `MAX_AI_REVIEW_CHARS`).
+   - `/coach` page (nav 教练): session list with delete, message stream with AI 生成 labels, input with pending/error/retry states, persistence across reloads; typing and browsing never send — only explicit sends do.
+   - Provider interface extended with optional bounded `history`; the DeepSeek adapter maps turns to chat messages. Tests: session persistence (incl. close-and-reopen), bounded history window, newest-first ordering with counts, validation and disabled-state errors.
 3. [ ] Batch 3: AI training-plan drafts (structured Zod-validated output, preview/edit/confirm, import via the existing planned-workout API).
 
 ### M3 scope and batches (completed and reviewer-accepted)
@@ -158,6 +163,7 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M6 Batch 4: 稀疏数据发送前提示 (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
 - [x] M6 Batch 5: 设置页 UI 配置 DeepSeek key、数据目录 key 文件与运行时启用 (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
 - [x] M7 Batch 1: expanded coach context with personal bests and authorized daily-status data (implemented, awaiting reviewer acceptance; M7 as a whole is not yet accepted).
+- [x] M7 Batch 2: persistent conversational coach — chat sessions/messages in SQLite, bounded history, /coach page (implemented, awaiting reviewer acceptance; M7 as a whole is not yet accepted).
 - Real DeepSeek smoke evidence (user-performed manual test, not executed by the implementation agent): in an isolated synthetic data directory with a locally configured key, the review page returned a result from `deepseek-flash`, the browser `POST /api/ai/review` returned 200, and the screenshot shows the request took about 2.59 seconds. No key, raw request body, or personal data was committed or shared.
 
 ## M2 implementation record

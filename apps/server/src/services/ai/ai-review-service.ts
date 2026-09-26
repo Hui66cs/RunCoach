@@ -102,6 +102,12 @@ export class AiReviewService {
     return this.enabled;
   }
 
+  /** Active provider + flag for the coach chat service (same hot-swappable
+   * instance; the key never leaves the provider). */
+  getActive(): { enabled: boolean; provider: TrainingReviewProvider } {
+    return { enabled: this.enabled, provider: this.provider };
+  }
+
   /**
    * Read-only preview of exactly what a review request would send. Never
    * calls the provider — it works even while the integration is disabled, so

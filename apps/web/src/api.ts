@@ -3,11 +3,14 @@ import type {
   ActivityListPage,
   ActivityPatch,
   ActivitySeriesResponse,
+  AiChatResponse,
   AiCoachContextResponse,
   AiContextPreviewResponse,
   AiKeyStatus,
   AiReviewResponse,
   AthleteSettings,
+  ChatMessagesResponse,
+  ChatSessionList,
   AthleteSettingsPatch,
   CalendarQuery,
   CalendarResponse,
@@ -45,6 +48,8 @@ export async function request<T>(input: RequestInfo | URL, init?: RequestInit): 
     } | null;
     throw new ApiError(body?.message ?? `请求失败：${response.status}`, body?.code ?? 'UNKNOWN');
   }
+  // 204 (and other empty bodies) have no JSON payload.
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 export function listActivities(params: URLSearchParams): Promise<ActivityListPage> {
@@ -78,6 +83,25 @@ export function getAiContextPreview(windowDays: 7 | 28): Promise<AiContextPrevie
 }
 export function getAiCoachContext(): Promise<AiCoachContextResponse> {
   return request('/api/ai/coach-context');
+}
+export function sendCoachChat(input: {
+  message: string;
+  sessionId?: string;
+}): Promise<AiChatResponse> {
+  return request('/api/ai/coach/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+}
+export function listCoachSessions(): Promise<ChatSessionList> {
+  return request('/api/ai/coach/chat/sessions');
+}
+export function getCoachMessages(sessionId: string): Promise<ChatMessagesResponse> {
+  return request(`/api/ai/coach/chat/sessions/${sessionId}/messages`);
+}
+export function deleteCoachSession(sessionId: string): Promise<void> {
+  return request(`/api/ai/coach/chat/sessions/${sessionId}`, { method: 'DELETE' });
 }
 export function getAiKeyStatus(): Promise<AiKeyStatus> {
   return request('/api/settings/ai');

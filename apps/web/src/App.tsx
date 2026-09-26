@@ -5,6 +5,7 @@ import { CalendarPage } from './pages/CalendarPage.js';
 import { DailyStatusPage } from './pages/DailyStatusPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { ImportsPage } from './pages/ImportsPage.js';
+import { CoachPage } from './pages/CoachPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { TrainingReviewPage } from './pages/TrainingReviewPage.js';
 import { TrendsPage } from './pages/TrendsPage.js';
@@ -35,6 +36,9 @@ function Layout() {
             <NavLink to="/review" className={linkClass}>
               回顾
             </NavLink>
+            <NavLink to="/coach" className={linkClass}>
+              教练
+            </NavLink>
             <NavLink to="/activities" className={linkClass}>
               活动
             </NavLink>
@@ -62,6 +66,7 @@ export function App() {
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="daily-status" element={<DailyStatusPage />} />
         <Route path="review" element={<TrainingReviewPage />} />
+        <Route path="coach" element={<CoachPage />} />
         <Route path="activities" element={<ActivitiesPage />} />
         <Route path="activities/:activityId" element={<ActivityDetailPage />} />
         <Route path="imports" element={<ImportsPage />} />

@@ -112,7 +112,8 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
 ### 当前里程碑 M7（AI 训练助手，进行中）
 
 - 所有者已批准（2026-09-26）：AI 助手可读取全部训练上下文（含每日状态量表与备注——敏感度最高，用户明确授权）、进行有持久记忆的对话、生成训练计划草稿并在用户逐条确认后导入日历。仍不上云：GPS 轨迹、逐点 samples、原始导入文件、设备信息、活动名称。指标全部由确定性代码计算，AI 只做解释。
-- Batch 1（已实现，等待 reviewer 验收）：`AiCoachContext`（全部训练上下文快照：全期 RUN 总量与首次活动日期、确定性个人纪录——最长距离/最长时长（移动时长回退）/最快平均配速（≥1 km）/最大周跑量（52 周汇总派生，早日期平局裁决）、最近 60 条活动摘要（白名单字段、最新在前、含总数）、52 周跑量、近 28 天计划执行汇总、近 28 天每日状态（量表+静息心率+备注，用户授权））。`GET /api/ai/coach-context` 只读、确定性、不调用 provider、禁用时也可访问；/review 页新增可展开“AI 助手上下文预览”与敏感度说明。Batch 2（对话+SQLite 会话记忆）与 Batch 3（计划草稿+导入）未开始。
+- Batch 1（已实现，等待 reviewer 验收）：`AiCoachContext`（全部训练上下文快照：全期 RUN 总量与首次活动日期、确定性个人纪录——最长距离/最长时长（移动时长回退）/最快平均配速（≥1 km）/最大周跑量（52 周汇总派生，早日期平局裁决）、最近 60 条活动摘要（白名单字段、最新在前、含总数）、52 周跑量、近 28 天计划执行汇总、近 28 天每日状态（量表+静息心率+备注，用户授权））。`GET /api/ai/coach-context` 只读、确定性、不调用 provider、禁用时也可访问；/review 页新增可展开“AI 助手上下文预览”与敏感度说明。
+- Batch 2（已实现，等待 reviewer 验收）：持久对话教练。`0006_ai_chat.sql`（chat_sessions + chat_messages，role CHECK、级联删除、索引）；`ChatRepository`（会话 CRUD、有界最近消息窗口）；`CoachChatService`（每条用户消息：解析/创建会话 → 快照确定性教练上下文 → 发送 [规则+上下文] + 最近 20 条消息 + 新消息 → 持久化双方轮次；未知会话 404 `SESSION_NOT_FOUND`）。API：`POST /api/ai/coach/chat`、`GET /api/ai/coach/chat/sessions`、`GET/DELETE .../sessions/:sessionId(/messages)`，Zod 校验（消息 ≤2000 字符，回复 ≤4000）。`/coach` 页（导航“教练”）：会话列表/删除、消息流（AI 生成标注）、输入与 pending/error/retry 状态；刷新后会话与消息仍在；输入与浏览不会触发发送。provider 接口扩展有界 `history`。仅用户显式发送才调用模型。Batch 3（计划草稿+导入）未开始。
 
 - Batch 1 已通过 reviewer 验收：运动员档案字段与每日状态的数据/API 基础，本批不含任何前端。
   - `0005_daily_training_context.sql`（forward-only，不改 0000–0004；重复执行幂等）：

@@ -14,6 +14,10 @@ import {
   aiReviewRequestSchema,
   aiReviewResponseSchema,
   athleteSettingsPatchSchema,
+  aiChatRequestSchema,
+  aiChatResponseSchema,
+  chatSessionListSchema,
+  chatMessagesResponseSchema,
   calendarQuerySchema,
   calendarResponseSchema,
   dailyStatusRangeQuerySchema,
@@ -34,8 +38,10 @@ import {
 import type { AppConfig } from './config.js';
 import type { AiKeysRuntime } from './services/ai/key-runtime.js';
 import type { ActivityRepository } from './repositories/activity-repository.js';
+import type { ChatRepository } from './repositories/chat-repository.js';
 import type { ImportService } from './services/import-service.js';
 import type { AiReviewService } from './services/ai/ai-review-service.js';
+import type { CoachChatService } from './services/ai/coach-chat-service.js';
 import { AiServiceError } from './services/ai/ai-review-service.js';
 import { RepositoryConflictError } from './repositories/activity-repository.js';
 import { sanitizeErrorMessage } from './errors.js';
@@ -50,11 +56,15 @@ interface AppDependencies {
   aiReview?: AiReviewService;
   /** Optional: absent when the server runs without the key runtime (tests). */
   aiKeys?: AiKeysRuntime;
+  /** Optional: absent (default in tests) disables the coach chat routes. */
+  chatRepository?: ChatRepository;
+  coachChat?: CoachChatService;
 }
 
 const aiServiceErrorStatus: Record<string, number> = {
   AI_DISABLED: 503,
   AI_CONTEXT_STALE: 409,
+  SESSION_NOT_FOUND: 404,
   AI_TIMEOUT: 504,
   AI_RATE_LIMITED: 429,
   AI_PROVIDER_ERROR: 502,
@@ -243,6 +253,68 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
       return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
     }
     return aiCoachContextResponseSchema.parse(service.coachContext());
+  });
+
+  // Conversational coach (M7 Batch 2): persistent multi-turn chat. Each
+  // request is user-triggered, validated by Zod, and persisted server-side.
+  app.post('/api/ai/coach/chat', async (request, reply) => {
+    const service = dependencies.coachChat;
+    if (service === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    const body = aiChatRequestSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ code: 'INVALID_AI_CHAT_REQUEST', message: '对话请求无效' });
+    }
+    try {
+      return aiChatResponseSchema.parse(await service.chat(body.data));
+    } catch (error) {
+      if (error instanceof AiServiceError) {
+        const status = aiServiceErrorStatus[error.code] ?? 502;
+        return reply.code(status).send({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get('/api/ai/coach/chat/sessions', () => {
+    const chatRepository = dependencies.chatRepository;
+    if (chatRepository === undefined) {
+      return chatSessionListSchema.parse({ sessions: [] });
+    }
+    return chatSessionListSchema.parse({ sessions: chatRepository.listSessions() });
+  });
+
+  app.get('/api/ai/coach/chat/sessions/:sessionId/messages', async (request, reply) => {
+    const chatRepository = dependencies.chatRepository;
+    if (chatRepository === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    const params = z.object({ sessionId: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ code: 'INVALID_SESSION_ID', message: '会话 ID 无效' });
+    }
+    if (chatRepository.getSession(params.data.sessionId) === null) {
+      return reply.code(404).send({ code: 'NOT_FOUND', message: '对话会话不存在' });
+    }
+    return chatMessagesResponseSchema.parse({
+      sessionId: params.data.sessionId,
+      messages: chatRepository.listMessages(params.data.sessionId),
+    });
+  });
+
+  app.delete('/api/ai/coach/chat/sessions/:sessionId', async (request, reply) => {
+    const chatRepository = dependencies.chatRepository;
+    if (chatRepository === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    const params = z.object({ sessionId: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return reply.code(400).send({ code: 'INVALID_SESSION_ID', message: '会话 ID 无效' });
+    }
+    const deleted = chatRepository.deleteSession(params.data.sessionId);
+    if (!deleted) return reply.code(404).send({ code: 'NOT_FOUND', message: '对话会话不存在' });
+    return reply.code(204).send();
   });
 
   app.post('/api/ai/review', async (request, reply) => {
