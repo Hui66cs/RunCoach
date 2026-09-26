@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AiReviewResponse, AiTrainingContext } from '@runcoach/shared';
-import { ApiError, getAiContextPreview, requestAiReview } from '../api.js';
+import { ApiError, getAiCoachContext, getAiContextPreview, requestAiReview } from '../api.js';
 import { formatDistance, formatDuration, formatPace } from '../format.js';
 import { reviewDataHints } from '../review-hints.js';
 
@@ -99,6 +100,13 @@ export function TrainingReviewPage() {
   const preview = useQuery({
     queryKey: ['ai-context', windowDays],
     queryFn: () => getAiContextPreview(windowDays),
+  });
+  // Expanded coach context for the upcoming conversational feature (M7):
+  // read-only, fetched once per visit so the user can audit what a chat
+  // request would send — it never triggers a model call.
+  const coachContextQuery = useQuery({
+    queryKey: ['ai-coach-context'],
+    queryFn: getAiCoachContext,
   });
 
   const review = useMutation({
@@ -252,10 +260,34 @@ export function TrainingReviewPage() {
           </p>
           <ContextDetails context={preview.data.context} />
 
+          {coachContextQuery.data !== undefined && (
+            <details className="mt-3" data-testid="coach-context-details">
+              <summary className="cursor-pointer text-xs text-slate-400">
+                AI 助手上下文预览（对话功能将使用；含每日状态与备注）
+              </summary>
+              <p className="mt-1 text-xs text-amber-300">
+                包含最近 28 天每日状态量表与备注、历史活动摘要、个人纪录与 52
+                周汇总——敏感度较高，仅在你发起对话时发送。
+              </p>
+              <pre
+                className="mt-2 overflow-x-auto rounded bg-slate-950 p-3 text-xs text-slate-300"
+                data-testid="coach-raw-context"
+              >
+                {JSON.stringify(coachContextQuery.data.context, null, 2)}
+              </pre>
+            </details>
+          )}
+
           {!aiEnabled && (
             <p className="mt-4 text-sm text-slate-400" data-testid="review-disabled-hint">
-              AI 回顾未在服务端启用（需要在服务器 .env 中配置 DeepSeek key
-              并开启开关）。你仍可以查看预览；确认发送暂不可用。
+              AI 回顾未在服务端启用（尚未配置 DeepSeek key）。你仍可以查看预览；确认发送暂不可用。
+              <Link
+                to="/settings"
+                className="ml-1 text-emerald-400 underline"
+                data-testid="review-disabled-settings-link"
+              >
+                前往设置页配置 DeepSeek API key
+              </Link>
             </p>
           )}
           {reviewIsStale && confirmed !== null && (

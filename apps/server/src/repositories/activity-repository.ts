@@ -1,5 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, gte, inArray, like, lt, lte, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  like,
+  lt,
+  lte,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type {
   ActivityListPage,
   ActivityListQuery,
@@ -36,6 +50,8 @@ import type {
   TrainingSummaryCounts,
   DailyStatusEntry,
   DailyStatusUpsert,
+  CoachActivityItem,
+  CoachPersonalBest,
 } from '@runcoach/shared';
 import {
   importOutcomeSchema,
@@ -1720,6 +1736,148 @@ export class ActivityRepository {
       primaryGoal: row.primaryGoal,
       weeklyDistanceTargetMeters: row.weeklyDistanceTargetMeters,
       updatedAt: row.updatedAt,
+    };
+  }
+
+  /**
+   * All-time RUN totals for the coach context (M7): one aggregate query, no
+   * samples. `firstActivityLocalDate` is null for an empty history.
+   */
+  getRunTotals(): {
+    runs: number;
+    totalDistanceMeters: number;
+    totalMovingDurationSeconds: number;
+    firstActivityLocalDate: string | null;
+  } {
+    const row = this.db
+      .select({
+        runs: sql<number>`count(*)`,
+        totalDistanceMeters: sql<number>`coalesce(sum(coalesce(${activities.distanceMeters}, 0)), 0)`,
+        totalMovingDurationSeconds: sql<number>`coalesce(sum(coalesce(${activities.movingDurationSeconds}, ${activities.durationSeconds}, 0)), 0)`,
+        firstActivityLocalDate: sql<string | null>`min(${activities.localDate})`,
+      })
+      .from(activities)
+      .where(eq(activities.activityType, 'RUN'))
+      .get();
+    return {
+      runs: Number(row?.runs ?? 0),
+      totalDistanceMeters: Number(row?.totalDistanceMeters ?? 0),
+      totalMovingDurationSeconds: Number(row?.totalMovingDurationSeconds ?? 0),
+      firstActivityLocalDate: row?.firstActivityLocalDate ?? null,
+    };
+  }
+
+  /**
+   * Deterministic RUN personal bests (M7): longest distance, longest
+   * duration (moving with duration fallback), fastest average pace over runs
+   * of at least 1 km. One bounded query per metric with deterministic
+   * tie-breaking (earlier date wins); the biggest-week metric is derived
+   * from the weekly volumes by the caller.
+   */
+  getRunPersonalBests(): CoachPersonalBest[] {
+    const bests: CoachPersonalBest[] = [];
+    const longestDistance = this.db
+      .select({ value: activities.distanceMeters, date: activities.localDate })
+      .from(activities)
+      .where(and(eq(activities.activityType, 'RUN'), isNotNull(activities.distanceMeters)))
+      .orderBy(desc(activities.distanceMeters), asc(activities.localDate))
+      .limit(1)
+      .get();
+    if (longestDistance?.value !== undefined && longestDistance.value !== null) {
+      bests.push({
+        metric: 'LONGEST_DISTANCE',
+        value: longestDistance.value,
+        achievedOn: longestDistance.date,
+      });
+    }
+    const longestDuration = this.db
+      .select({
+        value: sql<number>`coalesce(${activities.movingDurationSeconds}, ${activities.durationSeconds})`,
+        date: activities.localDate,
+      })
+      .from(activities)
+      .where(
+        and(
+          eq(activities.activityType, 'RUN'),
+          isNotNull(activities.movingDurationSeconds) || isNotNull(activities.durationSeconds),
+        ),
+      )
+      .orderBy(
+        desc(sql`coalesce(${activities.movingDurationSeconds}, ${activities.durationSeconds})`),
+        asc(activities.localDate),
+      )
+      .limit(1)
+      .get();
+    if (longestDuration?.value !== undefined) {
+      bests.push({
+        metric: 'LONGEST_DURATION',
+        value: Number(longestDuration.value),
+        achievedOn: longestDuration.date,
+      });
+    }
+    const fastestPace = this.db
+      .select({
+        value: sql<number>`${activities.durationSeconds} / ${activities.distanceMeters}`,
+        date: activities.localDate,
+      })
+      .from(activities)
+      .where(
+        and(
+          eq(activities.activityType, 'RUN'),
+          gte(activities.distanceMeters, 1000),
+          gte(activities.durationSeconds, 1),
+        ),
+      )
+      .orderBy(asc(sql`${activities.durationSeconds} / ${activities.distanceMeters}`))
+      .limit(1)
+      .get();
+    if (fastestPace?.value !== undefined) {
+      bests.push({
+        metric: 'FASTEST_AVG_PACE',
+        value: Number(fastestPace.value),
+        achievedOn: fastestPace.date,
+      });
+    }
+    return bests;
+  }
+
+  /**
+   * Most recent activity summaries for the coach context (M7): whitelisted
+   * fields only (no names, notes, GPS, or samples), newest first, bounded by
+   * `limit`, with the total history count so the model knows what a bounded
+   * list means.
+   */
+  listRecentCoachActivitySummaries(limit: number): {
+    items: CoachActivityItem[];
+    total: number;
+  } {
+    const items = this.db
+      .select({
+        localDate: activities.localDate,
+        activityType: activities.activityType,
+        distanceMeters: activities.distanceMeters,
+        durationSeconds: activities.durationSeconds,
+        movingDurationSeconds: activities.movingDurationSeconds,
+        averageHeartRateBpm: activities.averageHeartRateBpm,
+      })
+      .from(activities)
+      .orderBy(desc(activities.startTimeUtc), desc(activities.id))
+      .limit(limit)
+      .all();
+    const totalRow = this.db
+      .select({ n: sql<number>`count(*)` })
+      .from(activities)
+      .get();
+    return {
+      items: items.map((row) => ({
+        localDate: row.localDate,
+        activityType: row.activityType as CoachActivityItem['activityType'],
+        distanceMeters: row.distanceMeters,
+        durationSeconds: row.durationSeconds,
+        movingDurationSeconds: row.movingDurationSeconds,
+        averageHeartRateBpm: row.averageHeartRateBpm,
+      })),
+      total: Number(totalRow?.n ?? 0),
     };
   }
 

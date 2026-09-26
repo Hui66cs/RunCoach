@@ -90,8 +90,11 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
+      // The AI env path is pinned off and the provider points at the local
+      // mock so the UI-configured-key flow can be tested without any real
+      // key or network call.
       command:
-        'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-review-disabled RUNCOACH_PORT=3118 VITE_API_TARGET=http://127.0.0.1:3118 VITE_WEB_PORT=5190 pnpm dev:e2e',
+        'cross-env RUNCOACH_DATA_DIR=../../.e2e-data-review-disabled RUNCOACH_PORT=3118 VITE_API_TARGET=http://127.0.0.1:3118 VITE_WEB_PORT=5190 RUNCOACH_AI_ENABLED=false RUNCOACH_DEEPSEEK_API_KEY= RUNCOACH_DEEPSEEK_BASE_URL=http://127.0.0.1:3117 pnpm dev:e2e',
       url: 'http://127.0.0.1:5190/api/health',
       reuseExistingServer: false,
       timeout: 120_000,

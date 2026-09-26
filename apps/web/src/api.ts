@@ -3,7 +3,9 @@ import type {
   ActivityListPage,
   ActivityPatch,
   ActivitySeriesResponse,
+  AiCoachContextResponse,
   AiContextPreviewResponse,
+  AiKeyStatus,
   AiReviewResponse,
   AthleteSettings,
   AthleteSettingsPatch,
@@ -73,6 +75,22 @@ export function getAiContextPreview(windowDays: 7 | 28): Promise<AiContextPrevie
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ windowDays }),
   });
+}
+export function getAiCoachContext(): Promise<AiCoachContextResponse> {
+  return request('/api/ai/coach-context');
+}
+export function getAiKeyStatus(): Promise<AiKeyStatus> {
+  return request('/api/settings/ai');
+}
+export function saveAiKey(apiKey: string): Promise<AiKeyStatus> {
+  return request('/api/settings/ai-key', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ apiKey }),
+  });
+}
+export function clearAiKey(): Promise<AiKeyStatus> {
+  return request('/api/settings/ai-key', { method: 'DELETE' });
 }
 export function requestAiReview(body: {
   windowDays: 7 | 28;

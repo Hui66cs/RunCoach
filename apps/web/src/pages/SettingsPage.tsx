@@ -1,7 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { AthleteSettings, AthleteSettingsPatch } from '@runcoach/shared';
-import { getAthleteSettings, updateAthleteSettings } from '../api.js';
+import {
+  clearAiKey,
+  getAiKeyStatus,
+  getAthleteSettings,
+  saveAiKey,
+  updateAthleteSettings,
+} from '../api.js';
 import {
   athleteProfileFormState,
   buildAthleteProfilePatch,
@@ -100,7 +106,112 @@ export function SettingsPage() {
         </p>
       </form>
       <ProfileSection settings={query.data} />
+      <AiKeySection />
     </div>
+  );
+}
+
+/** DeepSeek key configuration for the training review (M6 Batch 5). The key
+ * is stored server-side in the data directory; the UI only ever sees a
+ * masked tail. Saving enables the integration without any .env editing. */
+function AiKeySection() {
+  const client = useQueryClient();
+  const status = useQuery({ queryKey: ['settings', 'ai-key'], queryFn: getAiKeyStatus });
+  const [apiKey, setApiKey] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: () => saveAiKey(apiKey.trim()),
+    onSuccess: async (data) => {
+      setApiKey('');
+      setFormError(null);
+      setNotice(`已保存并启用（${data.maskedTail ?? '****'}）。发送前仍需在回顾页逐次确认。`);
+      await client.invalidateQueries({ queryKey: ['settings', 'ai-key'] });
+    },
+    onError: (error) => {
+      setNotice(null);
+      setFormError(error.message);
+    },
+  });
+  const clear = useMutation({
+    mutationFn: clearAiKey,
+    onSuccess: async () => {
+      setApiKey('');
+      setFormError(null);
+      setNotice('已清除保存的 key。');
+      await client.invalidateQueries({ queryKey: ['settings', 'ai-key'] });
+    },
+    onError: (error) => {
+      setNotice(null);
+      setFormError(error.message);
+    },
+  });
+
+  const configured = (status.data?.maskedTail ?? null) !== null;
+  return (
+    <section className="grid gap-4 rounded-xl border border-slate-800 bg-slate-900 p-6 sm:grid-cols-2">
+      <h2 className="text-lg font-semibold sm:col-span-2">AI 回顾配置（DeepSeek）</h2>
+      {status.isLoading && <p className="text-sm text-slate-400 sm:col-span-2">正在加载配置…</p>}
+      {status.isError && (
+        <p className="text-sm text-red-400 sm:col-span-2">{status.error.message}</p>
+      )}
+      {status.data !== undefined && (
+        <p className="text-sm text-slate-300 sm:col-span-2" data-testid="ai-key-status">
+          状态：{status.data.aiEnabled ? '已启用' : '未启用'} ·{' '}
+          {status.data.maskedTail !== null
+            ? `已配置（${status.data.maskedTail}，来源：${
+                status.data.source === 'file' ? '本页设置' : '环境变量'
+              }）`
+            : '尚未配置 API key'}
+        </p>
+      )}
+      <label className="text-sm sm:col-span-2">
+        DeepSeek API key
+        <input
+          name="aiApiKey"
+          type="password"
+          autoComplete="off"
+          maxLength={200}
+          value={apiKey}
+          onChange={(event) => {
+            setApiKey(event.target.value);
+            setNotice(null);
+            setFormError(null);
+          }}
+          placeholder="sk-..."
+          className="mt-1 w-full rounded bg-slate-950 px-3 py-2"
+        />
+      </label>
+      <p className="text-sm text-slate-400 sm:col-span-2">
+        key 仅保存在本机数据目录（ai-provider.json），不会进入浏览器、日志或 Git；
+        录入后训练回顾即可启用。发送数据仍受字段白名单限制，并在回顾页每次发送前 预览与确认。
+      </p>
+      <div className="flex flex-wrap gap-3 sm:col-span-2">
+        <button
+          type="button"
+          onClick={() => save.mutate()}
+          disabled={save.isPending || apiKey.trim() === ''}
+          className="rounded bg-emerald-500 px-5 py-2 font-semibold text-slate-950 disabled:opacity-50"
+        >
+          {save.isPending ? '保存中…' : '保存并启用'}
+        </button>
+        <button
+          type="button"
+          onClick={() => clear.mutate()}
+          disabled={clear.isPending || !configured}
+          className="rounded border border-slate-600 px-5 py-2 text-sm disabled:opacity-50"
+        >
+          {clear.isPending ? '清除中…' : '清除'}
+        </button>
+      </div>
+      <p
+        aria-live="polite"
+        className={`text-sm sm:col-span-2 ${formError !== null ? 'text-red-400' : 'text-emerald-400'}`}
+      >
+        {formError ?? notice}
+      </p>
+    </section>
   );
 }
 

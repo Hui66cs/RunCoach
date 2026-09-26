@@ -28,7 +28,27 @@ M6 (approved): bounded training context and a server-side, read-only DeepSeek re
    - Terms wording fixed across `.env.example`/PLAN/PROJECT_CONTEXT/AGENTS: the de-identification/training clause is cited to its public source (2025-09-05《DeepSeek 用户协议》4.3) as possibly outdated — users must re-check the latest terms; running aggregates may still be sensitive; the server enable switch is not a per-send confirmation.
 3. [x] Batch 3: DeepSeek 回顾的事实口径提示词。**Stage-accepted (verdict: PASS WITH FOLLOW-UP).** The server-side system prompt (`reviewSystemPrompt`) now encodes: 7/28-day aggregates cover the rolling `windowStartLocalDate`..`windowEndLocalDate` range and must be described by actual dates or “近 7 天/近 28 天” (never “本周/本月”); `weeklyVolumes` contains only fully contained natural weeks, so an empty array never means “no running” (judge from `running`); adherence is explained strictly by the `eligibleCount`/`completedCount`/`adherenceRate` semantics, with eligible 0 or a null rate meaning “暂无可计算执行率的计划” and today-or-future PLANNED plans never judged as missed; the model must distinguish “数据为 0”, “该指标暂无可计算结果” and “上下文未提供该信息”, never invent facts; medical/injury/unrequested-plan prohibitions stay. Deterministic tests assert the rules verbatim in the prompt and the four boundary facts in the sent JSON. No context fields, API contract, schema, or whitelist changes.
 4. [x] Batch 4: 训练回顾的稀疏数据发送前提示。**Implemented, awaiting reviewer acceptance.** The preview panel shows deterministic “本次可回顾数据” hints derived purely from the returned `AiTrainingContext` (`apps/web/src/review-hints.ts` + unit tests): runs 0 → 该窗口没有跑步记录; eligible 0 / null rate → 没有可计算的计划执行率，尚未到期的计划不属于未完成或未达标; runs exist but weeklyVolumes empty → 只说明窗口内没有完整自然周汇总，绝不表述为缺少跑步数据; sparse (no runs and no evaluable plans) → a restrained reminder that the AI review will mostly restate the numbers. Hints always render from the currently displayed preview (window switch/refetch/fingerprint change updates them), never trigger `/api/ai/review`, and never block an explicit confirmation. E2E covers the sparse flow in both enabled and disabled projects; unit tests cover the four data scenarios. No context fields, API, schema, or migration changes.
-5. [ ] Batch 5+ (not started, not designed): additional providers or richer context must be approved separately.
+5. [x] Batch 5: 设置页 UI 配置 DeepSeek API key。**Implemented, awaiting reviewer acceptance.** Delivered:
+   - `AiKeyStore` (`apps/server/src/services/ai/key-store.ts`): the UI-configured key lives in `ai-provider.json` inside the data directory (gitignored via the `.local-data` / `.e2e-data-*` globs), written atomically (tmp + rename); it never enters the browser, logs, or Git, and `maskKey` exposes at most the last 4 characters.
+   - `POST /api/settings/ai` status / `PUT /api/settings/ai-key` / `DELETE /api/settings/ai-key` (`aiKeyStatusSchema` / `aiKeySaveSchema`, key 20–200 chars after trim): responses carry only `{aiEnabled, provider, source: 'file'|'env'|null, maskedTail}` — the full key is write-only and never echoed; invalid keys are rejected with 400 `INVALID_AI_KEY` without state changes.
+   - Resolution priority: settings-UI key file > env key > disabled (`createAiKeysRuntime`, injectable provider factory for tests). A UI key enables the integration without the `RUNCOACH_AI_ENABLED` flag (recording the key through the confirmed UI flow is the informed opt-in); clearing falls back to the env path with its own flag semantics or to disabled. The env path remains fully supported and unchanged.
+   - `/settings` gains an “AI 回顾配置（DeepSeek）” section (masked status, password input, 保存并启用/清除 with inline feedback); `/review`'s disabled hint links there. Sending still requires the per-request preview + fingerprint confirmation; no automatic sends, no browser-side keys.
+   - E2E: the review-disabled project pins the env path off and points the provider at the local mock, then covers UI key save → enabled → confirmed send → clear → disabled. CI still needs no real key.
+6. [ ] Batch 6+ (not started, not designed): additional providers must be approved separately.
+
+## Approved milestone M7: AI 训练助手（对话式教练）
+
+The owner approved expanding the AI scope (M6 Batch 5 rework discussion, 2026-09-26): the coach may read the full training context and converse, generate training-plan drafts, and hold persistent chat memory. Data scope authorized by the owner: basic training data (history activity summaries with dates/types/distances/durations/pace, deterministic personal bests, weekly/monthly volumes, plan adherence), daily-status scales AND notes (highest sensitivity, explicitly opted in), and activity-level average heart rate. Still never sent: GPS tracks, raw samples, raw imports, device info, activity names. Metrics remain deterministic (the LLM explains, never computes canonical numbers); chat is user-triggered only.
+
+### M7 scope and batches
+
+1. [x] Batch 1: expanded coach context. **Implemented, awaiting reviewer acceptance.** Delivered:
+   - `AiCoachContext` (shared schema): canonical date/offset; all-time RUN totals with first-activity date; deterministic personal bests (LONGEST_DISTANCE, LONGEST_DURATION with moving-duration fallback, FASTEST_AVG_PACE over runs ≥ 1 km, BIGGEST_WEEK_DISTANCE from the 52-week volumes; earliest-date tie-breaking); bounded most-recent-60 activity summaries (whitelisted fields only, newest first, total count included); 52 weekly volumes; last-28-days plan summary; last-28-days daily status (scales + resting HR + notes, explicitly authorized).
+   - `GET /api/ai/coach-context`: read-only, deterministic, never calls the provider, works while disabled; response `{context, aiEnabled}`. Structurally excludes names, notes on activities, GPS, samples, device info.
+   - `/review` shows the coach context in an expandable, clearly labelled panel ("AI 助手上下文预览") with a sensitivity note about daily status/notes.
+   - Tests: empty-database shape, PB boundaries incl. non-RUN exclusion, whitelist/bounding (65 activities → 60 + total), daily-status window inclusion.
+2. [ ] Batch 2: persistent conversational coach (SQLite chat sessions/messages migration, bounded history, `/coach` page).
+3. [ ] Batch 3: AI training-plan drafts (structured Zod-validated output, preview/edit/confirm, import via the existing planned-workout API).
 
 ### M3 scope and batches (completed and reviewer-accepted)
 
@@ -136,6 +156,8 @@ M2 acceptance, recorded results, and manual verification steps: `docs/M2_ACCEPTA
 - [x] M6 Batch 2: 训练回顾页面、发送前确认与本地 mock provider E2E (stage-accepted; verdict PASS WITH FOLLOW-UP).
 - [x] M6 Batch 3: 回顾事实口径提示词 (stage-accepted; verdict PASS WITH FOLLOW-UP).
 - [x] M6 Batch 4: 稀疏数据发送前提示 (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
+- [x] M6 Batch 5: 设置页 UI 配置 DeepSeek key、数据目录 key 文件与运行时启用 (implemented, awaiting reviewer acceptance; M6 as a whole is not yet accepted).
+- [x] M7 Batch 1: expanded coach context with personal bests and authorized daily-status data (implemented, awaiting reviewer acceptance; M7 as a whole is not yet accepted).
 - Real DeepSeek smoke evidence (user-performed manual test, not executed by the implementation agent): in an isolated synthetic data directory with a locally configured key, the review page returned a result from `deepseek-flash`, the browser `POST /api/ai/review` returned 200, and the screenshot shows the request took about 2.59 seconds. No key, raw request body, or personal data was committed or shared.
 
 ## M2 implementation record

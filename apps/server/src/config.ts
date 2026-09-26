@@ -46,6 +46,8 @@ export interface AppConfig {
     enabled: boolean;
     provider: 'none' | 'deepseek';
     deepSeek: { apiKey: string; baseUrl: string } | null;
+    /** Resolved base URL, always available (also for UI-configured keys). */
+    baseUrl: string;
     timeoutMs: number;
     maxOutputTokens: number;
   };
@@ -77,13 +79,16 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     maxUploadBytes: parsed.RUNCOACH_MAX_UPLOAD_BYTES,
     ai: {
       // Real calls require the explicit flag AND the deepseek provider AND a
-      // configured key; anything else keeps the integration disabled.
+      // configured key; anything else keeps the env path disabled. A key
+      // configured later through the settings UI bypasses the env flag (M6
+      // Batch 5) but never bypasses the per-send confirmation flow.
       enabled:
         parsed.RUNCOACH_AI_ENABLED &&
         parsed.RUNCOACH_AI_PROVIDER === 'deepseek' &&
         deepSeek !== null,
       provider: parsed.RUNCOACH_AI_PROVIDER,
       deepSeek,
+      baseUrl: parsed.RUNCOACH_DEEPSEEK_BASE_URL,
       timeoutMs: parsed.RUNCOACH_AI_TIMEOUT_MS,
       maxOutputTokens: parsed.RUNCOACH_AI_MAX_OUTPUT_TOKENS,
     },

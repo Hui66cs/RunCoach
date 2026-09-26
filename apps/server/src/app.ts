@@ -8,6 +8,9 @@ import {
   activitySeriesQuerySchema,
   aiContextPreviewRequestSchema,
   aiContextPreviewResponseSchema,
+  aiCoachContextResponseSchema,
+  aiKeySaveSchema,
+  aiKeyStatusSchema,
   aiReviewRequestSchema,
   aiReviewResponseSchema,
   athleteSettingsPatchSchema,
@@ -29,6 +32,7 @@ import {
   trendsResponseSchema,
 } from '@runcoach/shared';
 import type { AppConfig } from './config.js';
+import type { AiKeysRuntime } from './services/ai/key-runtime.js';
 import type { ActivityRepository } from './repositories/activity-repository.js';
 import type { ImportService } from './services/import-service.js';
 import type { AiReviewService } from './services/ai/ai-review-service.js';
@@ -36,12 +40,16 @@ import { AiServiceError } from './services/ai/ai-review-service.js';
 import { RepositoryConflictError } from './repositories/activity-repository.js';
 import { sanitizeErrorMessage } from './errors.js';
 
+/** Runtime for the settings-UI DeepSeek key configuration (M6 Batch 5). */
+
 interface AppDependencies {
   config: AppConfig;
   repository: ActivityRepository;
   importService: ImportService;
   /** Optional: absent (the default in tests) keeps the AI review disabled. */
   aiReview?: AiReviewService;
+  /** Optional: absent when the server runs without the key runtime (tests). */
+  aiKeys?: AiKeysRuntime;
 }
 
 const aiServiceErrorStatus: Record<string, number> = {
@@ -227,6 +235,16 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     return aiContextPreviewResponseSchema.parse(service.preview(body.data));
   });
 
+  // Read-only expanded coach context (M7 Batch 1): what the conversational
+  // coach would send. Never calls the provider; works while disabled.
+  app.get('/api/ai/coach-context', (_request, reply) => {
+    const service = dependencies.aiReview;
+    if (service === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    return aiCoachContextResponseSchema.parse(service.coachContext());
+  });
+
   app.post('/api/ai/review', async (request, reply) => {
     const service = dependencies.aiReview;
     if (service === undefined) {
@@ -250,6 +268,41 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
   });
 
   app.get('/api/settings/athlete', () => dependencies.repository.getAthleteSettings());
+
+  // Settings-UI DeepSeek key configuration (M6 Batch 5). The key itself is
+  // write-only through this surface: responses carry masked status views only.
+  app.get('/api/settings/ai', () => {
+    const runtime = dependencies.aiKeys;
+    if (runtime === undefined) {
+      return aiKeyStatusSchema.parse({
+        aiEnabled: dependencies.aiReview?.isEnabled() ?? false,
+        provider: 'none',
+        source: null,
+        maskedTail: null,
+      });
+    }
+    return aiKeyStatusSchema.parse(runtime.status());
+  });
+
+  app.put('/api/settings/ai-key', async (request, reply) => {
+    const runtime = dependencies.aiKeys;
+    if (runtime === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    const body = aiKeySaveSchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ code: 'INVALID_AI_KEY', message: 'API key 格式无效' });
+    }
+    return aiKeyStatusSchema.parse(runtime.saveKey(body.data.apiKey));
+  });
+
+  app.delete('/api/settings/ai-key', async (_request, reply) => {
+    const runtime = dependencies.aiKeys;
+    if (runtime === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    return aiKeyStatusSchema.parse(runtime.clearKey());
+  });
 
   app.patch('/api/settings/athlete', async (request, reply) => {
     const body = athleteSettingsPatchSchema.safeParse(request.body);

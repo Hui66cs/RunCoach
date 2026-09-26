@@ -44,3 +44,36 @@ test('preview-only flow with AI disabled: entering, switching the window, and le
   await page.goto('/');
   expect(reviewRequests.count()).toBe(0);
 });
+
+test('configuring the DeepSeek key from the settings UI enables the review flow', async ({
+  page,
+}) => {
+  // The AI env path is pinned off for this project, so enabling here can
+  // only come from the settings-UI key (stored server-side in the data dir).
+  await page.goto('/settings');
+  await page.getByLabel('DeepSeek API key').fill('sk-e2e-ui-configured-key-0001');
+  await page.getByRole('button', { name: '保存并启用' }).click();
+  const statusRow = page.getByTestId('ai-key-status');
+  await expect(statusRow).toContainText('已启用');
+  await expect(statusRow).toContainText('****0001');
+  await expect(statusRow).toContainText('本页设置');
+
+  // The review page flips to enabled without any .env change.
+  await page.goto('/review');
+  await expect(page.getByTestId('review-ai-enabled')).toHaveText('AI 回顾已启用');
+  await expect(page.getByTestId('review-confirm')).toBeEnabled();
+
+  // One explicit confirmation sends exactly one request to the mock provider
+  // through the real server adapter.
+  await page.getByTestId('review-confirm').click();
+  await expect(page.getByTestId('review-result')).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('review-text')).toContainText('模拟回顾');
+
+  // Clearing the key returns to the disabled state.
+  await page.goto('/settings');
+  await page.getByRole('button', { name: '清除' }).click();
+  await expect(statusRow).toContainText('未启用');
+  await page.goto('/review');
+  await expect(page.getByTestId('review-ai-enabled')).toHaveText('AI 回顾未启用');
+  await expect(page.getByTestId('review-confirm')).toBeDisabled();
+});

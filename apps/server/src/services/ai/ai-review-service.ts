@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 import {
+  MAX_AI_COACH_RECENT_ACTIVITIES,
   MAX_AI_REVIEW_CHARS,
+  aiCoachContextSchema,
   aiTrainingContextSchema,
   dashboardResponseSchema,
+  type AiCoachContextResponse,
   type AiContextPreviewRequest,
   type AiContextPreviewResponse,
   type AiReviewRequest,
@@ -10,7 +13,8 @@ import {
   type AiTrainingContext,
 } from '@runcoach/shared';
 import type { ActivityRepository } from '../../repositories/activity-repository.js';
-import { localDateFromUtcTime } from '../../dashboard-dates.js';
+import { addDays, localDateFromUtcTime } from '../../dashboard-dates.js';
+import { buildAiCoachContext, coachDailyStatusWindow } from './coach-context.js';
 import { buildAiTrainingContext } from './context.js';
 import { AiProviderError, type TrainingReviewProvider } from './provider.js';
 
@@ -72,14 +76,31 @@ export interface AiReviewServiceOptions {
 /**
  * User-triggered, read-only AI training review (M6). The context is assembled
  * exclusively from existing deterministic aggregates; the provider is only
- * called when the operator has enabled the integration; every failure maps to
- * a stable sanitized AiServiceError; no code path writes to SQLite.
+ * called when the integration is enabled (env path at startup, or a key
+ * configured through the settings UI at runtime — M6 Batch 5); every failure
+ * maps to a stable sanitized AiServiceError; no code path writes to SQLite.
  */
 export class AiReviewService {
+  private enabled: boolean;
+  private provider: TrainingReviewProvider;
+
   constructor(
     private readonly repository: ActivityRepository,
     private readonly options: AiReviewServiceOptions,
-  ) {}
+  ) {
+    this.enabled = options.enabled;
+    this.provider = options.provider;
+  }
+
+  /** Hot-swaps the active provider (settings UI key save/clear). */
+  configureProvider(options: { enabled: boolean; provider: TrainingReviewProvider }): void {
+    this.enabled = options.enabled;
+    this.provider = options.provider;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
 
   /**
    * Read-only preview of exactly what a review request would send. Never
@@ -91,13 +112,69 @@ export class AiReviewService {
     const context = this.buildContext(request, todayLocalDate);
     return {
       context,
-      aiEnabled: this.options.enabled,
+      aiEnabled: this.enabled,
       contextFingerprint: contextFingerprint(context),
     };
   }
 
+  /**
+   * Expanded conversational-coach context (M7 Batch 1): deterministic read
+   * only, never calls the provider, works while the integration is disabled
+   * so the user can always see what a chat request would send. The daily
+   * status window (scales + notes) is included per the user's explicit
+   * authorization.
+   */
+  coachContext(todayLocalDate?: string): AiCoachContextResponse {
+    const settings = this.repository.getAthleteSettings();
+    const today =
+      todayLocalDate ?? localDateFromUtcTime(Date.now(), settings.timezoneOffsetMinutes);
+    const dashboard = dashboardResponseSchema.parse(this.repository.getDashboard(today));
+    const trends = this.repository.getTrends({ weeks: 52 }, today);
+    const totals = this.repository.getRunTotals();
+    const personalBests = this.repository.getRunPersonalBests();
+    const recent = this.repository.listRecentCoachActivitySummaries(MAX_AI_COACH_RECENT_ACTIVITIES);
+    const statusWindow = coachDailyStatusWindow(today);
+    const dailyStatus = this.repository
+      .listDailyStatusEntries(statusWindow.from, statusWindow.to)
+      .map((entry) => ({
+        localDate: entry.localDate,
+        sleepQuality: entry.sleepQuality,
+        fatigueLevel: entry.fatigueLevel,
+        muscleSorenessLevel: entry.muscleSorenessLevel,
+        stressLevel: entry.stressLevel,
+        motivationLevel: entry.motivationLevel,
+        restingHeartRateBpm: entry.restingHeartRateBpm,
+        notes: entry.notes,
+      }));
+    const planSummary = this.repository.getTrainingSummary(
+      { from: addDays(today, -27), to: today },
+      today,
+    ).summary;
+    const context = aiCoachContextSchema.parse(
+      buildAiCoachContext({
+        todayLocalDate: today,
+        timezoneOffsetMinutes: dashboard.timezoneOffsetMinutes,
+        dashboard,
+        trends52WeeklyVolumes: trends.weeklyPoints.map((point) => ({
+          weekStartLocalDate: point.weekStartLocalDate,
+          weekEndLocalDate: point.weekEndLocalDate,
+          runs: point.runs,
+          totalDistanceMeters: point.totalDistanceMeters,
+          totalMovingDurationSeconds: point.totalMovingDurationSeconds,
+        })),
+        totals,
+        personalBests,
+        recentActivities: recent.items,
+        recentActivitiesTotal: recent.total,
+        planSummary,
+        dailyStatus,
+      }),
+    );
+    return { context, aiEnabled: this.enabled };
+  }
+
   async review(request: AiReviewRequest, todayLocalDate?: string): Promise<AiReviewResponse> {
-    if (!this.options.enabled) {
+    if (!this.enabled) {
       throw new AiServiceError('AI_DISABLED', 'AI 回顾未启用');
     }
     const context = this.buildContext(request, todayLocalDate);
@@ -112,7 +189,7 @@ export class AiReviewService {
 
     let completion;
     try {
-      completion = await this.options.provider.complete({
+      completion = await this.provider.complete({
         systemPrompt: reviewSystemPrompt,
         userPrompt,
         maxOutputTokens: this.options.maxOutputTokens,

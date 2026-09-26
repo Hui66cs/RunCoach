@@ -21,7 +21,9 @@ test('failure surfaces a readable error and retry succeeds', async ({ page }) =>
   await expect(page.getByTestId('review-raw-context')).toContainText('"eligibleCount"');
   await expect(page.getByTestId('review-raw-context')).toContainText('"windowStartLocalDate"');
 
-  // First confirmation: the mock provider answers 429 once.
+  // First confirmation: the mock provider is armed to answer 429 once, so
+  // this test is deterministic no matter which project runs first.
+  await fetch('http://127.0.0.1:3117/__arm429');
   await page.getByTestId('review-confirm').click();
   await expect(page.getByTestId('review-error')).toHaveText('AI 服务请求过于频繁，请稍后再试');
   expect(reviewRequests.count()).toBe(1);

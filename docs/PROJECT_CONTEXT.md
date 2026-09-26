@@ -107,6 +107,12 @@ M4 整体验收结论为 PASS WITH FOLLOW-UP：Batch 1 与 Batch 2 均已实现�
   - 本批不做：前端回顾 UI（后续 Batch 需另行批准）、更多 LLM provider、聊天/记忆功能、自动发送、AI 计划生成。
   - Batch 3（已验收，结论 PASS WITH FOLLOW-UP）：仅改进服务端系统提示词 `reviewSystemPrompt` 的事实口径——滚动窗口（用实际起止日期或“近 7 天/近 28 天”表述，禁止“本周/本月”）、`weeklyVolumes` 仅含完整自然周（空数组不代表没有跑步，以 `running` 字段判断）、执行率仅按 `eligibleCount/completedCount/adherenceRate` 口径（eligible 为 0 时说明暂无可计算执行率的计划，今天及未来待完成不算未达标）、要求区分“数据为 0/暂无可计算/上下文未提供”并不编造；医疗与伤病禁令保留。不改变 context 字段白名单、API contract 或确认流程；确定性测试断言提示词规则与四类边界事实。
   - Batch 4（已实现，等待 reviewer 验收）：`/review` 预览面板新增确定性“本次可回顾数据”提示（`apps/web/src/review-hints.ts`，纯函数 + 单测）：runs 为 0 → 如实说明窗口内没有跑步记录；eligible 为 0 且 adherenceRate 为 null → 说明没有可计算的计划执行率，尚未到期的计划不属于未完成或未达标；有跑步但 weeklyVolumes 为空 → 只说明窗口内没有完整自然周汇总，绝不表述为缺少跑步数据；无跑步且无可评估计划时提醒 AI 回顾可能主要概述已有数字（克制表述，不推断训练水平/健康/伤病）。提示始终依据当前展示的预览上下文（切换窗口/重取/指纹变化自动更新），绝不触发 `/api/ai/review`，也不阻止用户显式确认发送。E2E 在启用与禁用项目均覆盖；不改变发送字段、API、schema 或 migration。
+  - Batch 5（已实现，等待 reviewer 验收）：设置页新增“AI 回顾配置（DeepSeek）”区，无需手改 .env。key 通过 `PUT /api/settings/ai-key` 保存到数据目录 `ai-provider.json`（原子写入、gitignore 覆盖、重启生效），运行时热切换 provider；`GET /api/settings/ai` 返回 `{aiEnabled, provider, source: 'file'|'env'|null, maskedTail(末4位)}`，key 全量永不回显；`DELETE /api/settings/ai-key` 清除并回落 env 路径或禁用。解析优先级：UI 文件 key > env key > 禁用；UI 录入即启用（录入即知情确认），发送仍须回顾页逐次预览+确认。env 路径（RUNCOACH_AI_ENABLED 等）行为不变。E2E：review-disabled 项目将 env 禁用并把 provider 指向本地 mock，覆盖 UI 配置 → 启用 → 确认发送 → 清除 → 禁用全流程。
+
+### 当前里程碑 M7（AI 训练助手，进行中）
+
+- 所有者已批准（2026-09-26）：AI 助手可读取全部训练上下文（含每日状态量表与备注——敏感度最高，用户明确授权）、进行有持久记忆的对话、生成训练计划草稿并在用户逐条确认后导入日历。仍不上云：GPS 轨迹、逐点 samples、原始导入文件、设备信息、活动名称。指标全部由确定性代码计算，AI 只做解释。
+- Batch 1（已实现，等待 reviewer 验收）：`AiCoachContext`（全部训练上下文快照：全期 RUN 总量与首次活动日期、确定性个人纪录——最长距离/最长时长（移动时长回退）/最快平均配速（≥1 km）/最大周跑量（52 周汇总派生，早日期平局裁决）、最近 60 条活动摘要（白名单字段、最新在前、含总数）、52 周跑量、近 28 天计划执行汇总、近 28 天每日状态（量表+静息心率+备注，用户授权））。`GET /api/ai/coach-context` 只读、确定性、不调用 provider、禁用时也可访问；/review 页新增可展开“AI 助手上下文预览”与敏感度说明。Batch 2（对话+SQLite 会话记忆）与 Batch 3（计划草稿+导入）未开始。
 
 - Batch 1 已通过 reviewer 验收：运动员档案字段与每日状态的数据/API 基础，本批不含任何前端。
   - `0005_daily_training_context.sql`（forward-only，不改 0000–0004；重复执行幂等）：

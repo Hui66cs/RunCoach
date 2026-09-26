@@ -1,11 +1,12 @@
-// Local mock DeepSeek provider used only by the review E2E project so CI can
-// exercise the real server adapter, config, fingerprint guards, and UI
-// without any real API key. Returns 429 for the first chat completion after
-// each mock start (to exercise the failure/retry UI), then succeeds with a
-// short delay. No keys, no data leaving the machine.
+// Local mock DeepSeek provider used only by the review E2E projects so CI
+// can exercise the real server adapter, config, fingerprint guards, and UI
+// without any real API key. A test arms a single 429 response via
+// GET /__arm429 (then the next chat completion fails once and the flag
+// resets); by default every chat completion succeeds after a short delay so
+// project run order never matters. No keys, no data leaving the machine.
 import http from 'node:http';
 
-let calls = 0;
+let arm429 = false;
 
 const server = http.createServer((request, response) => {
   if (request.method === 'GET' && request.url === '/health') {
@@ -13,12 +14,18 @@ const server = http.createServer((request, response) => {
     response.end('ok');
     return;
   }
+  if (request.method === 'GET' && request.url === '/__arm429') {
+    arm429 = true;
+    response.writeHead(200, { 'content-type': 'text/plain' });
+    response.end('armed');
+    return;
+  }
   if (request.method === 'POST' && request.url === '/chat/completions') {
     request.resume();
     request.on('end', () => {
-      calls += 1;
       const respond = () => {
-        if (calls === 1) {
+        if (arm429) {
+          arm429 = false;
           response.writeHead(429, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ error: { message: 'mock rate limited' } }));
           return;

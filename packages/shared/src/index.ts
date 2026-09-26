@@ -839,3 +839,95 @@ export const aiReviewResponseSchema = z.object({
   generatedAt: z.iso.datetime(),
 });
 export type AiReviewResponse = z.infer<typeof aiReviewResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// AI provider key configuration (M6 Batch 5): the key is stored server-side
+// only (data directory file) and is never returned in full — every response
+// carries a masked tail at most.
+// ---------------------------------------------------------------------------
+
+export const aiKeyStatusSchema = z.object({
+  aiEnabled: z.boolean(),
+  provider: z.enum(['none', 'deepseek']),
+  source: z.enum(['file', 'env']).nullable(),
+  maskedTail: z.string().max(8).nullable(),
+});
+export type AiKeyStatus = z.infer<typeof aiKeyStatusSchema>;
+
+export const aiKeySaveSchema = z.strictObject({
+  apiKey: z.string().trim().min(20).max(200),
+});
+export type AiKeySave = z.infer<typeof aiKeySaveSchema>;
+
+// ---------------------------------------------------------------------------
+// AI coach context (M7): the expanded, user-authorized context for the
+// conversational coach — adds historical activity summaries, personal
+// bests, 52-week volumes, plan adherence, and the last 28 days of daily
+// status (including notes; explicitly authorized by the user as the most
+// sensitive part). Still excluded: GPS tracks, raw samples, raw imports,
+// device info, activity names.
+// ---------------------------------------------------------------------------
+
+export const MAX_AI_COACH_RECENT_ACTIVITIES = 60;
+export const MAX_AI_COACH_DAILY_STATUS_DAYS = 28;
+
+export const coachActivityItemSchema = z.object({
+  localDate: z.iso.date(),
+  activityType: activityTypeSchema,
+  distanceMeters: optionalFiniteNumber,
+  durationSeconds: optionalFiniteNumber,
+  movingDurationSeconds: optionalFiniteNumber,
+  averageHeartRateBpm: z.number().int().nonnegative().nullable(),
+});
+export type CoachActivityItem = z.infer<typeof coachActivityItemSchema>;
+
+export const coachPersonalBestMetricSchema = z.enum([
+  'LONGEST_DISTANCE',
+  'LONGEST_DURATION',
+  'FASTEST_AVG_PACE',
+  'BIGGEST_WEEK_DISTANCE',
+]);
+export type CoachPersonalBestMetric = z.infer<typeof coachPersonalBestMetricSchema>;
+
+export const coachPersonalBestSchema = z.object({
+  metric: coachPersonalBestMetricSchema,
+  value: z.number().finite().nonnegative(),
+  achievedOn: z.iso.date(),
+});
+export type CoachPersonalBest = z.infer<typeof coachPersonalBestSchema>;
+
+export const coachDailyStatusSchema = z.object({
+  localDate: z.iso.date(),
+  sleepQuality: dailyStatusScaleSchema,
+  fatigueLevel: dailyStatusScaleSchema,
+  muscleSorenessLevel: dailyStatusScaleSchema,
+  stressLevel: dailyStatusScaleSchema,
+  motivationLevel: dailyStatusScaleSchema,
+  restingHeartRateBpm: z.number().int().min(30).max(220).nullable(),
+  notes: z.string().max(2000).nullable(),
+});
+export type CoachDailyStatus = z.infer<typeof coachDailyStatusSchema>;
+
+export const aiCoachContextSchema = z.object({
+  generatedForLocalDate: z.iso.date(),
+  timezoneOffsetMinutes: z.number().int().min(-840).max(840),
+  totals: z.object({
+    runs: z.number().int().nonnegative(),
+    totalDistanceMeters: z.number().nonnegative(),
+    totalMovingDurationSeconds: z.number().nonnegative(),
+    firstActivityLocalDate: z.iso.date().nullable(),
+  }),
+  personalBests: z.array(coachPersonalBestSchema).max(4),
+  recentActivities: z.array(coachActivityItemSchema).max(MAX_AI_COACH_RECENT_ACTIVITIES),
+  recentActivitiesTotal: z.number().int().nonnegative(),
+  weeklyVolumes: z.array(dashboardWeeklyVolumeSchema).max(52),
+  planSummary: trainingSummaryCountsSchema,
+  dailyStatus: z.array(coachDailyStatusSchema).max(MAX_AI_COACH_DAILY_STATUS_DAYS),
+});
+export type AiCoachContext = z.infer<typeof aiCoachContextSchema>;
+
+export const aiCoachContextResponseSchema = z.object({
+  context: aiCoachContextSchema,
+  aiEnabled: z.boolean(),
+});
+export type AiCoachContextResponse = z.infer<typeof aiCoachContextResponseSchema>;
