@@ -6,6 +6,7 @@ import { DailyStatusPage } from './pages/DailyStatusPage.js';
 import { DashboardPage } from './pages/DashboardPage.js';
 import { ImportsPage } from './pages/ImportsPage.js';
 import { CoachPage } from './pages/CoachPage.js';
+import { PlanDraftPage } from './pages/PlanDraftPage.js';
 import { SettingsPage } from './pages/SettingsPage.js';
 import { TrainingReviewPage } from './pages/TrainingReviewPage.js';
 import { TrendsPage } from './pages/TrendsPage.js';
@@ -67,6 +68,7 @@ export function App() {
         <Route path="daily-status" element={<DailyStatusPage />} />
         <Route path="review" element={<TrainingReviewPage />} />
         <Route path="coach" element={<CoachPage />} />
+        <Route path="coach/plan" element={<PlanDraftPage />} />
         <Route path="activities" element={<ActivitiesPage />} />
         <Route path="activities/:activityId" element={<ActivityDetailPage />} />
         <Route path="imports" element={<ImportsPage />} />

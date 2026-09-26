@@ -63,3 +63,48 @@ export function coachDailyStatusWindow(todayLocalDate: string): {
     to: todayLocalDate,
   };
 }
+
+/**
+ * Serializes the coach context for the provider prompt. Semantically a strict
+ * subset of the structured context (no key is added, no value is altered):
+ * null/undefined values, empty strings, and empty arrays are omitted, and
+ * daily-status entries that carry no data beyond their local date are
+ * dropped. Meaningful zeros are kept. This shrinks every chat turn's token
+ * cost without changing what the whitelist authorizes.
+ */
+export function serializeCoachContext(context: AiCoachContext): string {
+  const dataBearing = context.dailyStatus.filter(
+    (entry) =>
+      entry.sleepQuality !== null ||
+      entry.fatigueLevel !== null ||
+      entry.muscleSorenessLevel !== null ||
+      entry.stressLevel !== null ||
+      entry.motivationLevel !== null ||
+      entry.restingHeartRateBpm !== null ||
+      (entry.notes !== null && entry.notes.trim() !== ''),
+  );
+  return JSON.stringify(
+    pruneEmpty(
+      dataBearing.length === context.dailyStatus.length
+        ? context
+        : { ...context, dailyStatus: dataBearing },
+    ),
+  );
+}
+
+function pruneEmpty(value: unknown): unknown {
+  if (value === null || value === undefined || value === '') return undefined;
+  if (Array.isArray(value)) {
+    const items = value.map(pruneEmpty).filter((item) => item !== undefined);
+    return items.length === 0 ? undefined : items;
+  }
+  if (typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      const pruned = pruneEmpty(item);
+      if (pruned !== undefined) result[key] = pruned;
+    }
+    return Object.keys(result).length === 0 ? undefined : result;
+  }
+  return value;
+}

@@ -11,6 +11,8 @@ import {
   aiCoachContextResponseSchema,
   aiKeySaveSchema,
   aiKeyStatusSchema,
+  aiPlanDraftRequestSchema,
+  aiPlanDraftResponseSchema,
   aiReviewRequestSchema,
   aiReviewResponseSchema,
   athleteSettingsPatchSchema,
@@ -42,6 +44,7 @@ import type { ChatRepository } from './repositories/chat-repository.js';
 import type { ImportService } from './services/import-service.js';
 import type { AiReviewService } from './services/ai/ai-review-service.js';
 import type { CoachChatService } from './services/ai/coach-chat-service.js';
+import type { PlanDraftService } from './services/ai/plan-draft-service.js';
 import { AiServiceError } from './services/ai/ai-review-service.js';
 import { RepositoryConflictError } from './repositories/activity-repository.js';
 import { sanitizeErrorMessage } from './errors.js';
@@ -59,6 +62,8 @@ interface AppDependencies {
   /** Optional: absent (default in tests) disables the coach chat routes. */
   chatRepository?: ChatRepository;
   coachChat?: CoachChatService;
+  /** Optional: absent (default in tests) disables the plan-draft route. */
+  planDraft?: PlanDraftService;
 }
 
 const aiServiceErrorStatus: Record<string, number> = {
@@ -268,6 +273,31 @@ export async function buildApp(dependencies: AppDependencies): Promise<FastifyIn
     }
     try {
       return aiChatResponseSchema.parse(await service.chat(body.data));
+    } catch (error) {
+      if (error instanceof AiServiceError) {
+        const status = aiServiceErrorStatus[error.code] ?? 502;
+        return reply.code(status).send({ code: error.code, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  // AI plan drafts (M7 Batch 3): the provider proposes preview-only items;
+  // importing happens exclusively through the existing planned-workout API
+  // after the user previews/edits/confirms. Nothing here writes to SQLite.
+  app.post('/api/ai/coach/plan-draft', async (request, reply) => {
+    const service = dependencies.planDraft;
+    if (service === undefined) {
+      return reply.code(503).send({ code: 'AI_DISABLED', message: 'AI 回顾未启用' });
+    }
+    const body = aiPlanDraftRequestSchema.safeParse(request.body ?? {});
+    if (!body.success) {
+      return reply
+        .code(400)
+        .send({ code: 'INVALID_AI_PLAN_DRAFT_REQUEST', message: '计划草稿请求无效' });
+    }
+    try {
+      return aiPlanDraftResponseSchema.parse(await service.draft(body.data));
     } catch (error) {
       if (error instanceof AiServiceError) {
         const status = aiServiceErrorStatus[error.code] ?? 502;

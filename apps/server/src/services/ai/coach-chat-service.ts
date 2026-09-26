@@ -5,34 +5,42 @@ import type { ChatRepository } from '../../repositories/chat-repository.js';
 import type { TrainingReviewProvider } from './provider.js';
 import { AiProviderError } from './provider.js';
 import { AiServiceError, reviewSystemPrompt } from './ai-review-service.js';
-import { buildAiCoachContext, coachDailyStatusWindow } from './coach-context.js';
+import {
+  buildAiCoachContext,
+  coachDailyStatusWindow,
+  serializeCoachContext,
+} from './coach-context.js';
 
 /** Chat system prompt: the factual interpretation rules from the review
- * prompt plus conversational boundaries. The bounded coach context JSON
- * travels in the user prompt; it never contains names, GPS, samples, or raw
- * imports. Structured plan generation is a separate feature — the chat must
- * not emit importable plans or claim to modify the calendar. */
-export function buildCoachChatSystemPrompt(): string {
+ * prompt, the conversational boundaries, and the serialized coach context.
+ * The context lives here — as the first message of every request — so the
+ * prefix stays byte-identical across turns whenever training data is
+ * unchanged, which lets the provider's prompt cache serve the bulk of the
+ * request instead of re-billing the full context every turn. It never
+ * contains names, GPS, samples, or raw imports. Structured plan generation
+ * is a separate feature — the chat must not emit importable plans or claim
+ * to modify the calendar. */
+export function buildCoachChatSystemPrompt(contextJson: string): string {
   return [
     reviewSystemPrompt,
     '',
     '对话规则：',
-    '- 你在一次多轮对话中回答用户关于其训练数据的问题；上方提供的训练上下文 JSON 是唯一事实来源。',
-    '- 上下文 JSON 每轮都会随消息重新提供；不要假装记得上下文之外的信息。',
+    '- 你在一次多轮对话中回答用户关于其训练数据的问题；下方提供的训练上下文 JSON 是唯一事实来源。',
+    '- 训练上下文 JSON 附于本条消息，每轮重新计算以保证数据最新；不要假装记得上下文之外的信息。',
     '- 回答要直接、简洁；用户问什么答什么，不必每次复述全部数字。',
     '- 禁止输出可导入日历的结构化训练计划；如用户请求计划，说明计划生成功能另行提供，可给出一般性文字建议。',
     '- 禁止医疗建议、伤病判断、readiness 评分；不编造数据。',
+    '',
+    '训练上下文 JSON（字段白名单，含每日状态与备注；空值与无数据条目已省略）：',
+    contextJson,
   ].join('\n');
 }
 
-/** Builds the per-turn user prompt: the bounded context JSON + the user's
- * new message. Prior turns travel in `history`, not here. */
-export function buildCoachChatUserPrompt(contextJson: string, message: string): string {
-  return [
-    '训练上下文 JSON（字段白名单，含每日状态与备注）：',
-    contextJson,
-    `用户新消息：${message}`,
-  ].join('\n');
+/** Builds the per-turn user prompt: only the user's new message. Prior turns
+ * travel in `history` with the same raw format, and the context JSON travels
+ * in the stable system prefix — not repeated here every turn. */
+export function buildCoachChatUserPrompt(message: string): string {
+  return message;
 }
 
 export interface CoachChatInput {
@@ -140,8 +148,8 @@ export class CoachChatService {
     let completion;
     try {
       completion = await active.provider.complete({
-        systemPrompt: buildCoachChatSystemPrompt(),
-        userPrompt: buildCoachChatUserPrompt(JSON.stringify(context), input.message),
+        systemPrompt: buildCoachChatSystemPrompt(serializeCoachContext(context)),
+        userPrompt: buildCoachChatUserPrompt(input.message),
         history,
         maxOutputTokens: this.options.maxOutputTokens,
         timeoutMs: this.options.timeoutMs,

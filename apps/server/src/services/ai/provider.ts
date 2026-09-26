@@ -24,9 +24,12 @@ export interface AiHistoryTurn {
 }
 
 export interface AiCompletionRequest {
-  /** Fixed server-owned instruction text; never contains user free text. */
+  /** Fixed server-owned instruction text plus the serialized authorized
+   * context. Stable across turns when training data is unchanged, so
+   * provider-side prefix caches can serve it; never contains names, GPS,
+   * samples, or raw imports (daily-status notes are user-authorized). */
   systemPrompt: string;
-  /** The bounded whitelist context serialized by the service. */
+  /** The user's new message (chat) or the review instruction (review). */
   userPrompt: string;
   /** Optional bounded prior conversation turns (oldest first, chat only). */
   history?: AiHistoryTurn[];

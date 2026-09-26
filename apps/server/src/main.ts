@@ -6,6 +6,7 @@ import { ActivityRepository } from './repositories/activity-repository.js';
 import { ChatRepository } from './repositories/chat-repository.js';
 import { AiReviewService } from './services/ai/ai-review-service.js';
 import { CoachChatService } from './services/ai/coach-chat-service.js';
+import { PlanDraftService } from './services/ai/plan-draft-service.js';
 import { createAiKeysRuntime } from './services/ai/key-runtime.js';
 import { DeepSeekReviewProvider } from './services/ai/deepseek-provider.js';
 import type { TrainingReviewProvider } from './services/ai/provider.js';
@@ -56,6 +57,11 @@ const coachChat = new CoachChatService(repository, chatRepository, () => aiRevie
   historyTurns: 20,
 });
 
+const planDraft = new PlanDraftService(repository, () => aiReview.getActive(), {
+  timeoutMs: config.ai.timeoutMs,
+  maxOutputTokens: config.ai.maxOutputTokens,
+});
+
 const app = await buildApp({
   config,
   repository,
@@ -64,6 +70,7 @@ const app = await buildApp({
   aiKeys,
   chatRepository,
   coachChat,
+  planDraft,
 });
 
 const shutdown = async () => {

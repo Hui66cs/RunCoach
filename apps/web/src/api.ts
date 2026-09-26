@@ -6,6 +6,8 @@ import type {
   AiChatResponse,
   AiCoachContextResponse,
   AiContextPreviewResponse,
+  AiPlanDraftRequest,
+  AiPlanDraftResponse,
   AiKeyStatus,
   AiReviewResponse,
   AthleteSettings,
@@ -96,6 +98,13 @@ export function sendCoachChat(input: {
 }
 export function listCoachSessions(): Promise<ChatSessionList> {
   return request('/api/ai/coach/chat/sessions');
+}
+export function requestPlanDraft(body: AiPlanDraftRequest): Promise<AiPlanDraftResponse> {
+  return request('/api/ai/coach/plan-draft', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 export function getCoachMessages(sessionId: string): Promise<ChatMessagesResponse> {
   return request(`/api/ai/coach/chat/sessions/${sessionId}/messages`);

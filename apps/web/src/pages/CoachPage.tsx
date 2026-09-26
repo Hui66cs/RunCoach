@@ -87,17 +87,26 @@ export function CoachPage() {
             基于你的训练记录、个人纪录与每日状态进行对话。回答由 AI 生成，仅供参考。
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setActiveSessionId(null);
-            setError(null);
-            chat.reset();
-          }}
-          className="rounded bg-slate-800 px-4 py-2 text-sm"
-        >
-          新对话
-        </button>
+        <div className="flex gap-2">
+          <Link
+            to="/coach/plan"
+            data-testid="coach-plan-draft-link"
+            className="rounded bg-purple-500/20 px-4 py-2 text-sm text-purple-200"
+          >
+            计划草稿
+          </Link>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveSessionId(null);
+              setError(null);
+              chat.reset();
+            }}
+            className="rounded bg-slate-800 px-4 py-2 text-sm"
+          >
+            新对话
+          </button>
+        </div>
       </header>
 
       <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-[16rem_1fr]">

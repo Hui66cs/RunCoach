@@ -34,6 +34,7 @@ interface Harness {
   directory: string;
   database: DatabaseContext;
   provider: RecordingProvider;
+  repository: ActivityRepository;
 }
 
 async function buildHarness(): Promise<Harness> {
@@ -79,7 +80,7 @@ async function buildHarness(): Promise<Harness> {
     chatRepository,
     coachChat,
   });
-  return { app, directory, database, provider };
+  return { app, directory, database, provider, repository };
 }
 
 describe('AI coach chat (M7 Batch 2)', () => {
@@ -118,13 +119,16 @@ describe('AI coach chat (M7 Batch 2)', () => {
     expect(body.reply).toBe('模拟回答 1');
     expect(body.sessionTitle).toBe('我最近的跑量怎么样？');
 
-    // The provider receives the rules, the context JSON, and no history on
+    // The provider receives the rules and the context JSON in the stable
+    // system prefix, the raw message as the user prompt, and no history on
     // the first turn.
     expect(harness.provider.requests).toHaveLength(1);
     const request = harness.provider.requests[0]!;
     expect(request.systemPrompt).toContain('滚动日期范围');
     expect(request.systemPrompt).toContain('训练上下文 JSON');
-    expect(request.userPrompt).toContain('我最近的跑量怎么样？');
+    expect(request.systemPrompt).toContain('"generatedForLocalDate"');
+    expect(request.userPrompt).toBe('我最近的跑量怎么样？');
+    expect(request.userPrompt).not.toContain('"generatedForLocalDate"');
     expect(request.history ?? []).toHaveLength(0);
 
     // A second message in the same session carries the prior turns.
@@ -142,6 +146,12 @@ describe('AI coach chat (M7 Batch 2)', () => {
       role: 'user',
       content: '我最近的跑量怎么样？',
     });
+    // Prefix stability (provider prompt-cache friendly): with unchanged
+    // training data the system prefix is byte-identical across turns, and
+    // the history stays free of context JSON.
+    expect(secondRequest.systemPrompt).toBe(request.systemPrompt);
+    expect(secondRequest.userPrompt).toBe('那和上个月比呢？');
+    expect(JSON.stringify(secondRequest.history)).not.toContain('"generatedForLocalDate"');
 
     // Both turns are persisted server-side.
     const messages = await harness.app.inject({
@@ -297,6 +307,36 @@ describe('AI coach chat (M7 Batch 2)', () => {
       url: `/api/ai/coach/chat/sessions/${sessionId}/messages`,
     });
     expect(messagesAfterDelete.statusCode).toBe(404);
+  });
+
+  it('recomputes the system prefix when training data changes between turns', async () => {
+    harness = await buildHarness();
+    tick();
+    const first = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '今天状态如何？' },
+    });
+    const sessionId = first.json<{ sessionId: string }>().sessionId;
+    const before = harness.provider.requests[0]!;
+
+    tick();
+    // New training data between turns: the deterministic context changes, so
+    // the model must see the fresh numbers, not a stale cached prefix.
+    harness.repository.upsertDailyStatusEntry('2026-09-26', {
+      sleepQuality: 4,
+      fatigueLevel: 2,
+      notes: '今晚状态不错',
+    });
+    await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '我刚才记录了状态', sessionId },
+    });
+    const after = harness.provider.requests[1]!;
+    expect(after.systemPrompt).not.toBe(before.systemPrompt);
+    expect(after.systemPrompt).toContain('今晚状态不错');
+    expect(before.systemPrompt).not.toContain('今晚状态不错');
   });
 
   it('lists sessions newest-activity-first with message counts', async () => {

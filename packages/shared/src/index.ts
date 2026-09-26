@@ -983,3 +983,42 @@ export const chatMessagesResponseSchema = z.object({
   messages: z.array(chatMessageViewSchema),
 });
 export type ChatMessagesResponse = z.infer<typeof chatMessagesResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// AI training-plan drafts (M7 Batch 3): the model proposes draft workouts as
+// structured JSON validated by Zod at the service boundary. A draft is never
+// canonical training data and never writes anything by itself — the user
+// previews/edits it and explicitly imports items through the existing
+// planned-workout API. Draft dates must lie inside the requested horizon.
+// ---------------------------------------------------------------------------
+
+export const MAX_AI_PLAN_DRAFT_ITEMS = 14;
+export const MAX_AI_PLAN_DRAFT_INSTRUCTION_CHARS = 500;
+
+export const aiPlanDraftRequestSchema = z.strictObject({
+  horizonDays: z.union([z.literal(7), z.literal(14)]).default(7),
+  instruction: z.string().trim().max(MAX_AI_PLAN_DRAFT_INSTRUCTION_CHARS).optional(),
+});
+export type AiPlanDraftRequest = z.infer<typeof aiPlanDraftRequestSchema>;
+
+/** Each item maps 1:1 onto `plannedWorkoutCreateSchema`, so importing an
+ * accepted item is a plain existing-API call with no translation. */
+export const aiPlanDraftItemSchema = z.object({
+  scheduledLocalDate: z.iso.date(),
+  workoutType: plannedWorkoutTypeSchema,
+  title: z.string().trim().min(1).max(120),
+  notes: z.string().max(2000).nullable().optional(),
+  targetDistanceMeters: z.number().finite().positive().nullable().optional(),
+  targetDurationSeconds: z.number().finite().positive().nullable().optional(),
+});
+export type AiPlanDraftItem = z.infer<typeof aiPlanDraftItemSchema>;
+
+export const aiPlanDraftResponseSchema = z.object({
+  horizonDays: z.number().int().min(1).max(28),
+  draftStartLocalDate: z.iso.date(),
+  draftEndLocalDate: z.iso.date(),
+  items: z.array(aiPlanDraftItemSchema).max(MAX_AI_PLAN_DRAFT_ITEMS),
+  model: z.string().trim().min(1).max(100),
+  generatedAt: z.iso.datetime(),
+});
+export type AiPlanDraftResponse = z.infer<typeof aiPlanDraftResponseSchema>;

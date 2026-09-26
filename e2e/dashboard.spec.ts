@@ -419,9 +419,12 @@ test('daily loop: plan today, record status, import, complete with link, dashboa
   await page.getByRole('button', { name: '保存' }).click();
   await expect(page.getByTitle(/E2E 闭环跑（(待完成|已逾期)，点击编辑）/).first()).toBeVisible();
 
-  // Step 2: record today's status through the dashboard entry point.
+  // Step 2: record today's status through the dashboard entry point. An
+  // earlier test in this shared data directory may already have recorded
+  // today, in which case the link reads 编辑今日状态 — both entries lead to
+  // the same page and saving below overwrites the values this test asserts.
   await page.goto('/');
-  await page.getByRole('link', { name: '记录今日状态' }).click();
+  await page.getByRole('link', { name: /记录今日状态|编辑今日状态/ }).click();
   await expect(page.getByTestId('daily-status-current-date')).toHaveText(`当前日期：${today}`);
   await page.getByRole('radio', { name: '睡眠质量 4' }).check();
   await page.getByRole('radio', { name: '疲劳程度 2' }).check();

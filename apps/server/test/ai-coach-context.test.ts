@@ -9,6 +9,7 @@ import { openDatabase, type DatabaseContext } from '../src/db/client.js';
 import { applyMigrations } from '../src/db/migrate.js';
 import { ActivityRepository } from '../src/repositories/activity-repository.js';
 import { AiReviewService } from '../src/services/ai/ai-review-service.js';
+import { serializeCoachContext } from '../src/services/ai/coach-context.js';
 import type { TrainingReviewProvider } from '../src/services/ai/provider.js';
 import { ImportService } from '../src/services/import-service.js';
 import { RawFileStore } from '../src/storage/raw-file-store.js';
@@ -242,5 +243,161 @@ describe('AI coach context (M7 Batch 1)', () => {
       fatigueLevel: 2,
       notes: '今天的自报状态备注',
     });
+  });
+});
+
+describe('serializeCoachContext (prompt-only slimming)', () => {
+  function makeContext(overrides: Partial<AiCoachContext> = {}): AiCoachContext {
+    return {
+      generatedForLocalDate: '2026-09-26',
+      timezoneOffsetMinutes: 480,
+      totals: {
+        runs: 2,
+        totalDistanceMeters: 10_000,
+        totalMovingDurationSeconds: 3000,
+        firstActivityLocalDate: '2026-09-25',
+      },
+      personalBests: [{ metric: 'LONGEST_DISTANCE', value: 6000, achievedOn: '2026-09-25' }],
+      recentActivities: [
+        {
+          localDate: '2026-09-26',
+          activityType: 'RUN',
+          distanceMeters: 4000,
+          durationSeconds: 1200,
+          movingDurationSeconds: 1180,
+          averageHeartRateBpm: null,
+        },
+        {
+          localDate: '2026-09-25',
+          activityType: 'STRENGTH',
+          distanceMeters: null,
+          durationSeconds: null,
+          movingDurationSeconds: null,
+          averageHeartRateBpm: null,
+        },
+      ],
+      recentActivitiesTotal: 2,
+      weeklyVolumes: [
+        {
+          weekStartLocalDate: '2026-09-21',
+          weekEndLocalDate: '2026-09-27',
+          runs: 2,
+          totalDistanceMeters: 10_000,
+          totalMovingDurationSeconds: 3000,
+        },
+      ],
+      planSummary: {
+        plannedCount: 1,
+        completedCount: 1,
+        linkedCompletedCount: 0,
+        skippedCount: 0,
+        overdueCount: 0,
+        upcomingCount: 0,
+        eligibleCount: 1,
+        adherenceRate: null,
+      },
+      dailyStatus: [
+        {
+          localDate: '2026-09-26',
+          sleepQuality: null,
+          fatigueLevel: null,
+          muscleSorenessLevel: null,
+          stressLevel: null,
+          motivationLevel: null,
+          restingHeartRateBpm: null,
+          notes: null,
+        },
+        {
+          localDate: '2026-09-25',
+          sleepQuality: 4,
+          fatigueLevel: 2,
+          muscleSorenessLevel: null,
+          stressLevel: null,
+          motivationLevel: null,
+          restingHeartRateBpm: 55,
+          notes: '感觉不错',
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it('omits null and empty values, empty arrays, and dataless daily entries', () => {
+    const context = makeContext({
+      personalBests: [],
+      recentActivitiesTotal: 0,
+      dailyStatus: [
+        {
+          localDate: '2026-09-26',
+          sleepQuality: null,
+          fatigueLevel: null,
+          muscleSorenessLevel: null,
+          stressLevel: null,
+          motivationLevel: null,
+          restingHeartRateBpm: null,
+          notes: null,
+        },
+      ],
+    });
+    const serialized = serializeCoachContext(context);
+    expect(serialized).not.toContain('"personalBests"');
+    expect(serialized).not.toContain('"dailyStatus"');
+    expect(serialized).not.toContain('"averageHeartRateBpm"');
+    expect(serialized).not.toContain('"adherenceRate"');
+    // The dataless STRENGTH activity is pruned to its date and type only.
+    expect(serialized).toContain('{"localDate":"2026-09-25","activityType":"STRENGTH"}');
+    // The remaining activity item keeps only the fields that carry data.
+    expect(serialized).toContain('"distanceMeters":4000');
+    expect(serialized).toContain('"runs":2');
+    // Deterministic and parseable back.
+    expect(() => JSON.parse(serialized) as unknown).not.toThrow();
+    expect(serializeCoachContext(context)).toBe(serialized);
+  });
+
+  it('keeps meaningful zeros and all data-bearing whitelist keys', () => {
+    const context = makeContext({
+      weeklyVolumes: [
+        {
+          weekStartLocalDate: '2026-09-21',
+          weekEndLocalDate: '2026-09-27',
+          runs: 0,
+          totalDistanceMeters: 0,
+          totalMovingDurationSeconds: 0,
+        },
+      ],
+      dailyStatus: [
+        {
+          localDate: '2026-09-26',
+          sleepQuality: null,
+          fatigueLevel: 3,
+          muscleSorenessLevel: null,
+          stressLevel: null,
+          motivationLevel: null,
+          restingHeartRateBpm: null,
+          notes: null,
+        },
+      ],
+    });
+    const serialized = serializeCoachContext(context);
+    // Zeros are real information (a zero-volume week) and must survive.
+    expect(serialized).toContain('"totalDistanceMeters":0');
+    // A single data-bearing scale keeps the entry and its date.
+    expect(serialized).toContain('"fatigueLevel":3');
+    expect(serialized).toContain('"localDate":"2026-09-26"');
+    // The output is a strict subset: every top-level key is whitelisted.
+    const parsed = JSON.parse(serialized) as Record<string, unknown>;
+    for (const key of Object.keys(parsed)) {
+      expect([
+        'generatedForLocalDate',
+        'timezoneOffsetMinutes',
+        'totals',
+        'personalBests',
+        'recentActivities',
+        'recentActivitiesTotal',
+        'weeklyVolumes',
+        'planSummary',
+        'dailyStatus',
+      ]).toContain(key);
+    }
   });
 });
