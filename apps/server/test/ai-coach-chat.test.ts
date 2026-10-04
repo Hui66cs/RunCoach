@@ -9,6 +9,7 @@ import { applyMigrations } from '../src/db/migrate.js';
 import { ActivityRepository } from '../src/repositories/activity-repository.js';
 import { ChatRepository } from '../src/repositories/chat-repository.js';
 import { AiReviewService } from '../src/services/ai/ai-review-service.js';
+import { AiProviderError } from '../src/services/ai/provider.js';
 import { CoachChatService } from '../src/services/ai/coach-chat-service.js';
 import { MAX_CHAT_HISTORY_TURNS } from '@runcoach/shared';
 import type {
@@ -29,6 +30,37 @@ class RecordingProvider implements TrainingReviewProvider {
   }
 }
 
+/** Steps run in order; a step that throws simulates a provider failure
+ * (e.g. 429). After the queue runs dry, every call succeeds. */
+class QueueProvider implements TrainingReviewProvider {
+  public requests: AiCompletionRequest[] = [];
+  constructor(private readonly steps: Array<() => AiCompletion>) {}
+  complete(request: AiCompletionRequest): Promise<AiCompletion> {
+    this.requests.push(request);
+    const step = this.steps.shift();
+    if (step === undefined) {
+      return Promise.resolve({ text: `模拟回答 ${this.requests.length}`, model: 'fake' });
+    }
+    return Promise.resolve(step());
+  }
+}
+
+/** Blocks inside complete() until the test releases it, simulating a slow
+ * provider round so the test can mutate shared state mid-flight. */
+class GatedProvider implements TrainingReviewProvider {
+  public requests: AiCompletionRequest[] = [];
+  private release?: () => void;
+  complete(request: AiCompletionRequest): Promise<AiCompletion> {
+    this.requests.push(request);
+    return new Promise<AiCompletion>((resolve) => {
+      this.release = () => resolve({ text: '迟到回复', model: 'fake' });
+    });
+  }
+  releaseNow(): void {
+    this.release?.();
+  }
+}
+
 interface Harness {
   app: FastifyInstance;
   directory: string;
@@ -37,7 +69,7 @@ interface Harness {
   repository: ActivityRepository;
 }
 
-async function buildHarness(): Promise<Harness> {
+async function buildHarness(provider?: TrainingReviewProvider): Promise<Harness> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'runcoach-ai-chat-'));
   const database = openDatabase(path.join(directory, 'runcoach.db'));
   applyMigrations(database.sqlite, path.resolve('apps/server/drizzle'));
@@ -45,10 +77,10 @@ async function buildHarness(): Promise<Harness> {
   const fileStore = new RawFileStore(directory);
   const importService = new ImportService(repository, fileStore, DEFAULT_OFFSET);
   const chatRepository = new ChatRepository(database.db);
-  const provider = new RecordingProvider();
+  const activeProvider = provider ?? new RecordingProvider();
   const aiReview = new AiReviewService(repository, {
     enabled: true,
-    provider,
+    provider: activeProvider,
     timeoutMs: 5000,
     maxOutputTokens: 512,
   });
@@ -80,7 +112,7 @@ async function buildHarness(): Promise<Harness> {
     chatRepository,
     coachChat,
   });
-  return { app, directory, database, provider, repository };
+  return { app, directory, database, provider: activeProvider as RecordingProvider, repository };
 }
 
 describe('AI coach chat (M7 Batch 2)', () => {
@@ -368,5 +400,291 @@ describe('AI coach chat (M7 Batch 2)', () => {
     expect(sessions.map((session) => session.id)).toEqual([firstId, secondId]);
     expect(sessions[0]?.messageCount).toBe(4);
     expect(sessions[1]?.messageCount).toBe(2);
+  });
+
+  it('leaves no session after a failed new chat; explicit retry commits one round', async () => {
+    harness = await buildHarness(
+      new QueueProvider([
+        () => {
+          throw new AiProviderError('RATE_LIMITED', 'AI 服务请求过于频繁，请稍后再试');
+        },
+      ]),
+    );
+    const failed = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '会失败的新对话' },
+    });
+    expect(failed.statusCode).toBe(429);
+    expect(failed.json()).toMatchObject({ code: 'AI_RATE_LIMITED' });
+
+    // Nothing persisted: no empty session, no orphan user message.
+    const afterFailure = await harness.app.inject({
+      method: 'GET',
+      url: '/api/ai/coach/chat/sessions',
+    });
+    expect(afterFailure.json()).toMatchObject({ sessions: [] });
+
+    const retried = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '会失败的新对话' },
+    });
+    expect(retried.statusCode).toBe(200);
+    const sessionId = retried.json<{ sessionId: string }>().sessionId;
+    const sessions = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; messageCount: number }> }>().sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ id: sessionId, messageCount: 2 });
+  });
+
+  it('keeps an existing session untouched on failure; retry appends exactly one round', async () => {
+    harness = await buildHarness(
+      new QueueProvider([
+        () => ({ text: '模拟回答 1', model: 'fake' }),
+        () => {
+          throw new AiProviderError('RATE_LIMITED', 'AI 服务请求过于频繁，请稍后再试');
+        },
+      ]),
+    );
+    const first = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第一个问题' },
+    });
+    const sessionId = first.json<{ sessionId: string }>().sessionId;
+    const before = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; updatedAt: string; messageCount: number }> }>()
+      .sessions[0]!;
+
+    tick();
+    const second = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第二个问题', sessionId },
+    });
+    expect(second.statusCode).toBe(429);
+
+    // Failure changed nothing: same updatedAt, same message count.
+    const afterFailure = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; updatedAt: string; messageCount: number }> }>()
+      .sessions[0]!;
+    expect(afterFailure.updatedAt).toBe(before.updatedAt);
+    expect(afterFailure.messageCount).toBe(before.messageCount);
+
+    // The failed attempt is absent from the next provider history; the
+    // pending user message travels only in this round's userPrompt.
+    const retried = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第二个问题', sessionId },
+    });
+    expect(retried.statusCode).toBe(200);
+    const history = harness.provider.requests[2]!.history ?? [];
+    expect(history).toHaveLength(2);
+    expect(JSON.stringify(history)).not.toContain('第二个问题');
+    expect(harness.provider.requests[2]!.userPrompt).toBe('第二个问题');
+
+    const after = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; messageCount: number }> }>().sessions[0]!;
+    expect(after.messageCount).toBe(4);
+    const messages = await harness.app.inject({
+      method: 'GET',
+      url: `/api/ai/coach/chat/sessions/${sessionId}/messages`,
+    });
+    expect(
+      messages.json<{ messages: Array<{ role: string }> }>().messages.map((m) => m.role),
+    ).toEqual(['user', 'assistant', 'user', 'assistant']);
+  });
+
+  it('writes nothing for timeout, empty, and oversized provider outcomes', async () => {
+    // Timeout: provider-level failure.
+    harness = await buildHarness(
+      new QueueProvider([
+        () => {
+          throw new AiProviderError('TIMEOUT', 'AI 服务调用超时');
+        },
+      ]),
+    );
+    const timeout = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '超时的问题' },
+    });
+    expect(timeout.statusCode).toBe(504);
+    expect(
+      (await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })).json(),
+    ).toMatchObject({ sessions: [] });
+    await harness.app.close();
+    harness.database.close();
+    fs.rmSync(harness.directory, { recursive: true, force: true });
+
+    // Empty response: provider succeeds, service validation fails.
+    harness = await buildHarness(new QueueProvider([() => ({ text: '   ', model: 'fake' })]));
+    const empty = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '空回答' },
+    });
+    expect(empty.statusCode).toBe(502);
+    expect(empty.json()).toMatchObject({ code: 'AI_EMPTY_RESPONSE' });
+    expect(
+      (await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })).json(),
+    ).toMatchObject({ sessions: [] });
+    await harness.app.close();
+    harness.database.close();
+    fs.rmSync(harness.directory, { recursive: true, force: true });
+
+    // Oversized reply: provider succeeds, size validation fails.
+    harness = await buildHarness(
+      new QueueProvider([() => ({ text: '长'.repeat(4001), model: 'fake' })]),
+    );
+    const oversized = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '超长回答' },
+    });
+    expect(oversized.statusCode).toBe(502);
+    expect(oversized.json()).toMatchObject({ code: 'AI_INVALID_OUTPUT' });
+    expect(
+      (await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })).json(),
+    ).toMatchObject({ sessions: [] });
+  });
+
+  it('lets the user resend the same sentence as a second successful round', async () => {
+    harness = await buildHarness();
+    const first = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '同一句话' },
+    });
+    const sessionId = first.json<{ sessionId: string }>().sessionId;
+    tick();
+    const second = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '同一句话', sessionId },
+    });
+    expect(second.statusCode).toBe(200);
+    const messages = await harness.app.inject({
+      method: 'GET',
+      url: `/api/ai/coach/chat/sessions/${sessionId}/messages`,
+    });
+    const rows = messages.json<{ messages: Array<{ role: string; content: string }> }>().messages;
+    expect(rows.map((row) => row.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(rows.filter((row) => row.content === '同一句话')).toHaveLength(2);
+    // The second round's history contains the whole first round.
+    expect(harness.provider.requests[1]!.history).toHaveLength(2);
+  });
+
+  it('rolls the whole turn back when the second message write fails', async () => {
+    harness = await buildHarness();
+    const first = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第一条消息' },
+    });
+    const sessionId = first.json<{ sessionId: string }>().sessionId;
+    const before = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; updatedAt: string; messageCount: number }> }>()
+      .sessions[0]!;
+
+    // Inject a real SQLite write failure for this exact user message.
+    harness.database.sqlite
+      .prepare(
+        `CREATE TRIGGER fail_chat_user_insert BEFORE INSERT ON chat_messages
+         WHEN NEW.role = 'user' AND NEW.content = '第二条消息'
+         BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;`,
+      )
+      .run();
+
+    const failed = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第二条消息', sessionId },
+    });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json()).toMatchObject({ code: 'INTERNAL_ERROR' });
+
+    const afterFailure = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; updatedAt: string; messageCount: number }> }>()
+      .sessions[0]!;
+    expect(afterFailure.updatedAt).toBe(before.updatedAt);
+    expect(afterFailure.messageCount).toBe(before.messageCount);
+
+    // New-session variant: the same write failure must not leave a session.
+    const failedNew = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第二条消息' },
+    });
+    expect(failedNew.statusCode).toBe(500);
+    const sessionsAfter = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string }> }>().sessions;
+    expect(sessionsAfter).toHaveLength(1);
+    expect(sessionsAfter.map((session) => session.id)).toEqual([sessionId]);
+
+    // Remove the trigger; the explicit retry now commits normally.
+    harness.database.sqlite.prepare('DROP TRIGGER fail_chat_user_insert').run();
+    const retried = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第二条消息', sessionId },
+    });
+    expect(retried.statusCode).toBe(200);
+    const after = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; messageCount: number }> }>().sessions[0]!;
+    expect(after.messageCount).toBe(4);
+  });
+
+  it('reports SESSION_NOT_FOUND and persists nothing when the session is deleted mid-flight', async () => {
+    const gated = new GatedProvider();
+    harness = await buildHarness(gated);
+    // First round: release the gate so the session gets created normally.
+    const firstPromise = harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '将被删除的会话' },
+    });
+    await vi.waitFor(() => expect(gated.requests).toHaveLength(1));
+    gated.releaseNow();
+    const first = await firstPromise;
+    const sessionId = first.json<{ sessionId: string }>().sessionId;
+    const sessionsBefore = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string }> }>().sessions;
+
+    const pending = harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '等待期间会话被删除', sessionId },
+    });
+    await vi.waitFor(() => expect(gated.requests).toHaveLength(2));
+    const deleted = await harness.app.inject({
+      method: 'DELETE',
+      url: `/api/ai/coach/chat/sessions/${sessionId}`,
+    });
+    expect(deleted.statusCode).toBe(204);
+    gated.releaseNow();
+
+    const response = await pending;
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'SESSION_NOT_FOUND' });
+
+    // No resurrection, no new session, no orphan messages.
+    const sessionsAfter = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string }> }>().sessions;
+    expect(sessionsAfter.map((session) => session.id)).toEqual(
+      sessionsBefore.filter((session) => session.id !== sessionId).map((session) => session.id),
+    );
   });
 });

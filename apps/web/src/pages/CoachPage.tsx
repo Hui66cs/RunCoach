@@ -12,16 +12,27 @@ import { ApiError } from '../api.js';
 
 type ReplyError = { message: string; stale: boolean };
 
+/** The exact send target captured at submit time (M7 R2): retries always
+ * belong to this snapshot, never to whatever the mutable input shows later. */
+interface ChatSendTarget {
+  message: string;
+  sessionId: string | null;
+}
+
 /** Conversational coach page (M7 Batch 2): persistent multi-turn chat backed
  * by SQLite sessions. Every request is user-triggered; the coach reads the
  * same authorized context snapshot shown on /review and never modifies
- * training data. */
+ * training data. While a send is pending, every operation that could change
+ * the round's ownership (new/switch/delete session, editing the input) is
+ * locked, and the mutation works on the fixed parameters captured at submit
+ * time — success/failure can never clobber a newer input or another session. */
 export function CoachPage() {
   const client = useQueryClient();
   const navigate = useNavigate();
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState<ReplyError | null>(null);
+  const [failedSend, setFailedSend] = useState<ChatSendTarget | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const sessions = useQuery({ queryKey: ['coach-sessions'], queryFn: listCoachSessions });
@@ -33,24 +44,31 @@ export function CoachPage() {
   });
 
   const chat = useMutation({
-    mutationFn: () =>
+    mutationFn: (target: ChatSendTarget) =>
       sendCoachChat(
-        activeSessionId !== null
-          ? { message: message.trim(), sessionId: activeSessionId }
-          : { message: message.trim() },
+        target.sessionId !== null
+          ? { message: target.message, sessionId: target.sessionId }
+          : { message: target.message },
       ),
-    onSuccess: async (data) => {
-      setMessage('');
+    onSuccess: async (data, target) => {
       setError(null);
-      if (activeSessionId === null) setActiveSessionId(data.sessionId);
+      setFailedSend(null);
+      setActiveSessionId(data.sessionId);
+      // Input was locked while pending, so clearing only the submitted text
+      // cannot clobber a newer draft.
+      setMessage((current) => (current === target.message ? '' : current));
       await Promise.all([
         client.invalidateQueries({ queryKey: ['coach-sessions'] }),
         client.invalidateQueries({ queryKey: ['coach-messages', data.sessionId] }),
       ]);
     },
-    onError: (err) => {
+    onError: (err, target) => {
       const stale = err instanceof ApiError && err.code === 'AI_CONTEXT_STALE';
       setError({ message: err.message, stale });
+      setFailedSend(target);
+    },
+    onSettled: () => {
+      sendInFlight.current = false;
     },
   });
 
@@ -68,10 +86,27 @@ export function CoachPage() {
 
   const aiStatus = useQuery({ queryKey: ['ai-coach-context'], queryFn: getAiCoachContext });
 
+  const busy = chat.isPending;
+  // Synchronous re-entry guard: a double-click can land twice before React
+  // re-renders the disabled button, so the submit/retry handlers also block.
+  const sendInFlight = useRef(false);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (message.trim() === '' || chat.isPending) return;
-    chat.mutate();
+    if (message.trim() === '' || busy || sendInFlight.current) return;
+    sendInFlight.current = true;
+    chat.mutate({ message: message.trim(), sessionId: activeSessionId });
+  };
+  // A retry exists only while the input still matches the failed send; once
+  // the user edits the question it becomes a new send via the normal button.
+  const retryAvailable =
+    failedSend !== null &&
+    !busy &&
+    message === failedSend.message &&
+    activeSessionId === failedSend.sessionId;
+  const retry = () => {
+    if (failedSend === null || busy || sendInFlight.current) return;
+    sendInFlight.current = true;
+    chat.mutate(failedSend);
   };
 
   useEffect(() => {
@@ -97,12 +132,13 @@ export function CoachPage() {
           </Link>
           <button
             type="button"
+            disabled={busy}
             onClick={() => {
               setActiveSessionId(null);
               setError(null);
-              chat.reset();
+              setFailedSend(null);
             }}
-            className="rounded bg-slate-800 px-4 py-2 text-sm"
+            className="rounded bg-slate-800 px-4 py-2 text-sm disabled:opacity-50"
           >
             新对话
           </button>
@@ -121,12 +157,13 @@ export function CoachPage() {
               <li key={session.id} className="flex items-center gap-1">
                 <button
                   type="button"
+                  disabled={busy}
                   onClick={() => {
                     setActiveSessionId(session.id);
                     setError(null);
-                    chat.reset();
+                    setFailedSend(null);
                   }}
-                  className={`min-w-0 flex-1 truncate rounded px-2 py-1.5 text-left text-sm ${
+                  className={`min-w-0 flex-1 truncate rounded px-2 py-1.5 text-left text-sm disabled:opacity-50 ${
                     activeSessionId === session.id
                       ? 'bg-emerald-500/20 text-emerald-200'
                       : 'text-slate-300 hover:bg-slate-800'
@@ -137,10 +174,11 @@ export function CoachPage() {
                 <button
                   type="button"
                   aria-label={`删除会话 ${session.title}`}
+                  disabled={busy}
                   onClick={() => {
                     removeSession.mutate(session.id);
                   }}
-                  className="rounded px-1.5 py-1 text-xs text-slate-500 hover:text-red-400"
+                  className="rounded px-1.5 py-1 text-xs text-slate-500 hover:text-red-400 disabled:opacity-50"
                 >
                   删除
                 </button>
@@ -199,11 +237,11 @@ export function CoachPage() {
               data-testid="coach-error"
             >
               {error.message}
-              {!error.stale && (
+              {!error.stale && retryAvailable && (
                 <button
                   type="button"
-                  onClick={() => chat.mutate()}
-                  disabled={chat.isPending}
+                  onClick={retry}
+                  disabled={busy}
                   className="ml-2 rounded border border-slate-600 px-2 py-0.5 text-xs"
                 >
                   重试
@@ -218,17 +256,18 @@ export function CoachPage() {
               value={message}
               onChange={(event) => setMessage(event.target.value)}
               maxLength={2000}
+              disabled={busy}
               placeholder={
                 aiStatus.data?.aiEnabled === false
                   ? 'AI 回顾未启用，请先在设置页配置'
                   : '询问你的训练数据…'
               }
               aria-label="对话输入"
-              className="min-w-0 flex-1 rounded bg-slate-950 px-3 py-2 text-sm"
+              className="min-w-0 flex-1 rounded bg-slate-950 px-3 py-2 text-sm disabled:opacity-50"
             />
             <button
               type="submit"
-              disabled={chat.isPending || message.trim() === ''}
+              disabled={busy || message.trim() === ''}
               className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50"
             >
               发送

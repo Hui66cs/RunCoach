@@ -65,9 +65,13 @@ export interface CoachChatServiceOptions {
 
 /**
  * Persistent conversational coach (M7 Batch 2). Each explicit user message:
- * resolves/creates the session, snapshots the deterministic coach context,
- * sends [rules + context] + bounded history + the new message to the
- * provider, and persists both turns. Read-only with respect to training
+ * resolves the target session (404 when missing), snapshots the deterministic
+ * coach context, sends [rules + context] + bounded history + the new message
+ * to the provider, and only after the provider returns and the output passes
+ * validation commits the round atomically (M7 R2 success-commit semantics:
+ * session creation for new chats, both messages, and `updated_at` in one
+ * transaction — failed calls leave no trace and never hold a write
+ * transaction while the provider runs). Read-only with respect to training
  * data; failures map to stable sanitized AiServiceError codes.
  */
 export class CoachChatService {
@@ -94,7 +98,6 @@ export class CoachChatService {
     if (requestedSessionId !== null && session === null) {
       throw new AiServiceError('SESSION_NOT_FOUND', '对话会话不存在或已被删除');
     }
-    const current = session ?? this.chatRepository.createSession(input.message.slice(0, 30), now);
 
     const dashboard = this.repository.getDashboard(today);
     const trends = this.repository.getTrends({ weeks: 52 }, today);
@@ -139,11 +142,14 @@ export class CoachChatService {
       }),
     );
 
-    const history = this.chatRepository
-      .recentMessages(current.id, this.options.historyTurns)
-      .map((row) => ({ role: row.role, content: row.content }));
-
-    this.chatRepository.appendMessage(current.id, 'user', input.message, now);
+    // Read-only: only committed messages travel as history, so failed turns
+    // can never leak into the provider context.
+    const history =
+      session === null
+        ? []
+        : this.chatRepository
+            .recentMessages(session.id, this.options.historyTurns)
+            .map((row) => ({ role: row.role, content: row.content }));
 
     let completion;
     try {
@@ -168,18 +174,27 @@ export class CoachChatService {
     if (replyText.length > MAX_AI_REVIEW_CHARS) {
       throw new AiServiceError('AI_INVALID_OUTPUT', 'AI 服务返回内容超出大小限制');
     }
-    const assistantRow = this.chatRepository.appendMessage(
-      current.id,
-      'assistant',
-      replyText,
-      new Date().toISOString(),
-    );
+
+    // Success-commit semantics: only now, with a validated reply, does any
+    // write happen — atomically (new-session creation included) and never
+    // while the provider call is in flight. A session deleted meanwhile is
+    // reported as SESSION_NOT_FOUND, not resurrected.
+    const committed = this.chatRepository.commitChatTurn({
+      sessionId: requestedSessionId,
+      sessionTitle: input.message.slice(0, 30),
+      userMessage: input.message,
+      assistantMessage: replyText,
+      now,
+    });
+    if (committed === null) {
+      throw new AiServiceError('SESSION_NOT_FOUND', '对话会话不存在或已被删除');
+    }
     return {
-      sessionId: current.id,
-      sessionTitle: current.title,
+      sessionId: committed.sessionId,
+      sessionTitle: committed.sessionTitle,
       reply: replyText,
       model: completion.model.slice(0, 100),
-      createdAt: assistantRow.createdAt,
+      createdAt: now,
     };
   }
 }

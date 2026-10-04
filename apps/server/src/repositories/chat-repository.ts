@@ -142,4 +142,69 @@ export class ChatRepository {
       .all();
     return rows.reverse().map((row) => ({ ...row, role: row.role as 'user' | 'assistant' }));
   }
+
+  /**
+   * Atomically commits one successful chat turn (M7 R2): for an existing
+   * session it re-confirms the session still exists, then inserts both the
+   * user and assistant messages and bumps `updated_at`; for a new session it
+   * creates the session inside the same transaction. Any failure rolls the
+   * whole turn back — no half-committed rounds, no orphan messages, and a
+   * session deleted while the provider was running is reported as null
+   * instead of being resurrected. Must never be called while a provider
+   * request is in flight.
+   */
+  commitChatTurn(input: {
+    sessionId: string | null;
+    sessionTitle: string;
+    userMessage: string;
+    assistantMessage: string;
+    now: string;
+  }): { sessionId: string; sessionTitle: string } | null {
+    return this.db.transaction((tx) => {
+      let sessionId = input.sessionId;
+      let sessionTitle: string;
+      if (sessionId === null) {
+        const row = {
+          id: randomUUID(),
+          title: input.sessionTitle,
+          createdAt: input.now,
+          updatedAt: input.now,
+        };
+        tx.insert(chatSessions).values(row).run();
+        sessionId = row.id;
+        sessionTitle = row.title;
+      } else {
+        const existing = tx
+          .select({ title: chatSessions.title })
+          .from(chatSessions)
+          .where(eq(chatSessions.id, sessionId))
+          .get();
+        if (existing === undefined) return null;
+        sessionTitle = existing.title;
+      }
+      tx.insert(chatMessages)
+        .values([
+          {
+            id: randomUUID(),
+            sessionId,
+            role: 'user',
+            content: input.userMessage,
+            createdAt: input.now,
+          },
+          {
+            id: randomUUID(),
+            sessionId,
+            role: 'assistant',
+            content: input.assistantMessage,
+            createdAt: input.now,
+          },
+        ])
+        .run();
+      tx.update(chatSessions)
+        .set({ updatedAt: input.now })
+        .where(eq(chatSessions.id, sessionId))
+        .run();
+      return { sessionId, sessionTitle };
+    });
+  }
 }

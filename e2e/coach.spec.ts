@@ -9,6 +9,14 @@ function trackChatRequests(page: Page): { count: () => number } {
   return { count: () => sent };
 }
 
+/** Removes leftover sessions so assertions about session counts stay exact. */
+async function clearSessions(page: Page): Promise<void> {
+  const leftover = await page.request.get('/api/ai/coach/chat/sessions');
+  for (const session of ((await leftover.json()) as { sessions: Array<{ id: string }> }).sessions) {
+    await page.request.delete(`/api/ai/coach/chat/sessions/${session.id}`);
+  }
+}
+
 test('coach chat: ask, get a reply, persist across reload, and manage sessions', async ({
   page,
 }) => {
@@ -63,6 +71,74 @@ test('coach chat requires explicit sends: nothing fires while typing or browsing
   // Leave without sending.
   await page.goto('/');
   expect(chatRequests.count()).toBe(0);
+});
+
+test('chat failure keeps nothing on the server; explicit retry commits exactly one round', async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const chatRequests = trackChatRequests(page);
+  await clearSessions(page);
+  await page.goto('/coach');
+
+  // The armed 429 fails the first send; with success-commit semantics the
+  // server must not create the session or store the user message.
+  await page.request.get('http://127.0.0.1:3117/__arm429');
+  await page.getByLabel('对话输入').fill('失败后重试的问题');
+  await page.getByRole('button', { name: '发送' }).click();
+  await expect(page.getByTestId('coach-error')).toContainText('过于频繁');
+  const sessionsAfterFailure = (await (
+    await page.request.get('/api/ai/coach/chat/sessions')
+  ).json()) as { sessions: unknown[] };
+  expect(sessionsAfterFailure.sessions).toHaveLength(0);
+
+  // The input is preserved and the retry still targets the original send.
+  await expect(page.getByLabel('对话输入')).toHaveValue('失败后重试的问题');
+  await page.getByRole('button', { name: '重试' }).dblclick();
+  await expect(page.getByTestId('coach-messages')).toContainText('模拟回顾');
+  expect(chatRequests.count()).toBe(2); // one failed send + one retry
+
+  // Exactly one session with both turns, and it survives a reload.
+  const sessions = (await (await page.request.get('/api/ai/coach/chat/sessions')).json()) as {
+    sessions: Array<{ id: string; messageCount: number }>;
+  };
+  expect(sessions.sessions).toHaveLength(1);
+  expect(sessions.sessions[0]?.messageCount).toBe(2);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'AI 训练助手' })).toBeVisible();
+  await page.getByRole('button', { name: '失败后重试的问题', exact: true }).click();
+  await expect(page.getByTestId('coach-messages')).toContainText('失败后重试的问题');
+  await expect(page.getByTestId('coach-messages')).toContainText('模拟回顾');
+  await clearSessions(page);
+});
+
+test('pending locks ownership controls; double-click sends exactly once', async ({ page }) => {
+  test.setTimeout(60_000);
+  const chatRequests = trackChatRequests(page);
+  await clearSessions(page);
+  await page.goto('/coach');
+  await page.getByLabel('对话输入').fill('第一轮问题');
+  await page.getByRole('button', { name: '发送' }).click();
+  await expect(page.getByTestId('coach-messages')).toContainText('模拟回顾');
+
+  // While the next round is pending, everything that could change the
+  // round's ownership or clobber the input is locked.
+  await page.getByLabel('对话输入').fill('第二轮问题');
+  await page.getByRole('button', { name: '发送' }).dblclick();
+  expect(chatRequests.count()).toBe(2); // exactly one call for this round
+  await expect(page.getByLabel('对话输入')).toBeDisabled();
+  await expect(page.getByLabel('对话输入')).toHaveValue('第二轮问题');
+  await expect(page.getByRole('button', { name: '发送' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '新对话' })).toBeDisabled();
+  const switchButton = page.getByRole('button', { name: '第一轮问题', exact: true });
+  await expect(switchButton).toBeDisabled();
+  await expect(page.getByRole('button', { name: '删除会话 第一轮问题' })).toBeDisabled();
+
+  // The round completes normally and the input is cleared exactly once.
+  await expect(page.getByTestId('coach-messages')).toContainText('模拟回顾');
+  await expect(page.getByLabel('对话输入')).toBeEnabled();
+  await expect(page.getByLabel('对话输入')).toHaveValue('');
+  await clearSessions(page);
 });
 
 test('plan draft: explicit generate, preview, edit, and import via the existing API', async ({
