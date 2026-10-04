@@ -645,6 +645,70 @@ describe('AI coach chat (M7 Batch 2)', () => {
     expect(after.messageCount).toBe(4);
   });
 
+  it('rolls the whole turn back when the assistant message write fails', async () => {
+    harness = await buildHarness();
+    const first = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '第一条消息' },
+    });
+    const sessionId = first.json<{ sessionId: string }>().sessionId;
+    const before = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; updatedAt: string; messageCount: number }> }>()
+      .sessions[0]!;
+
+    // Block the SECOND insert of the round: the user row must be rolled back
+    // together with it — no half round may survive.
+    harness.database.sqlite
+      .prepare(
+        `CREATE TRIGGER fail_chat_assistant_insert BEFORE INSERT ON chat_messages
+         WHEN NEW.role = 'assistant'
+         BEGIN SELECT RAISE(ABORT, 'injected assistant write failure'); END;`,
+      )
+      .run();
+
+    const failed = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '助手写入失败的消息', sessionId },
+    });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json()).toMatchObject({ code: 'INTERNAL_ERROR' });
+
+    const afterFailure = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; updatedAt: string; messageCount: number }> }>()
+      .sessions[0]!;
+    expect(afterFailure.updatedAt).toBe(before.updatedAt);
+    expect(afterFailure.messageCount).toBe(before.messageCount); // the user row rolled back too
+
+    // New-session variant: neither the session nor any message may remain.
+    const failedNew = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '新会话助手写入失败' },
+    });
+    expect(failedNew.statusCode).toBe(500);
+    const sessionsAfter = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string }> }>().sessions;
+    expect(sessionsAfter.map((session) => session.id)).toEqual([sessionId]);
+
+    // Remove the trigger; the explicit retry commits the full round.
+    harness.database.sqlite.prepare('DROP TRIGGER fail_chat_assistant_insert').run();
+    const retried = await harness.app.inject({
+      method: 'POST',
+      url: '/api/ai/coach/chat',
+      payload: { message: '助手写入失败的消息', sessionId },
+    });
+    expect(retried.statusCode).toBe(200);
+    const after = (
+      await harness.app.inject({ method: 'GET', url: '/api/ai/coach/chat/sessions' })
+    ).json<{ sessions: Array<{ id: string; messageCount: number }> }>().sessions[0]!;
+    expect(after.messageCount).toBe(4);
+  });
+
   it('reports SESSION_NOT_FOUND and persists nothing when the session is deleted mid-flight', async () => {
     const gated = new GatedProvider();
     harness = await buildHarness(gated);

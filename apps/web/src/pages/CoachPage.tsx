@@ -54,9 +54,12 @@ export function CoachPage() {
       setError(null);
       setFailedSend(null);
       setActiveSessionId(data.sessionId);
-      // Input was locked while pending, so clearing only the submitted text
-      // cannot clobber a newer draft.
-      setMessage((current) => (current === target.message ? '' : current));
+      // The submitted target is the trimmed input, so the comparison is made
+      // on the same normalized form — a message with surrounding whitespace
+      // still clears once its send succeeded. Input was locked while
+      // pending, so clearing only the submitted text cannot clobber a newer
+      // draft.
+      setMessage((current) => (current.trim() === target.message ? '' : current));
       await Promise.all([
         client.invalidateQueries({ queryKey: ['coach-sessions'] }),
         client.invalidateQueries({ queryKey: ['coach-messages', data.sessionId] }),
@@ -96,12 +99,15 @@ export function CoachPage() {
     sendInFlight.current = true;
     chat.mutate({ message: message.trim(), sessionId: activeSessionId });
   };
-  // A retry exists only while the input still matches the failed send; once
-  // the user edits the question it becomes a new send via the normal button.
+  // A retry exists only while the input still matches the failed send —
+  // compared in the same trimmed form that was submitted, so whitespace
+  // alone neither hides the retry nor makes an edited question look like the
+  // old one; once the user changes the question it becomes a new send via
+  // the normal button.
   const retryAvailable =
     failedSend !== null &&
     !busy &&
-    message === failedSend.message &&
+    message.trim() === failedSend.message &&
     activeSessionId === failedSend.sessionId;
   const retry = () => {
     if (failedSend === null || busy || sendInFlight.current) return;
