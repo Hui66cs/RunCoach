@@ -226,6 +226,50 @@ describe('AI coach context (M7 Batch 1)', () => {
     expect(body.context.totals.firstActivityLocalDate).not.toBeNull();
   });
 
+  it('keeps the LONGEST_DURATION moving-first rule with total-duration fallback (regression)', async () => {
+    // Regression for the JavaScript `||` bug in the LONGEST_DURATION filter:
+    // it silently kept only `movingDurationSeconds IS NOT NULL`, excluding
+    // runs whose moving duration is null (CSV imports often lack it) and so
+    // breaking the documented moving-duration-first/total-duration fallback.
+    harness = await buildHarness();
+    // A: no moving duration, valid total 5000s — must now be included via
+    // the fallback and win over B whose moving duration is only 4000s.
+    createActivity(harness.repository, harness.fileStore, {
+      localDate: '2026-09-01',
+      durationSeconds: 5000,
+      movingDurationSeconds: null,
+    });
+    // B: both durations present — its effective value is the moving 4000s
+    // (never the larger total 9000s), proving the moving-first priority.
+    createActivity(harness.repository, harness.fileStore, {
+      localDate: '2026-09-02',
+      durationSeconds: 9000,
+      movingDurationSeconds: 4000,
+    });
+    // C: both durations missing — never a duration candidate.
+    createActivity(harness.repository, harness.fileStore, {
+      localDate: '2026-09-03',
+      distanceMeters: 3000,
+      durationSeconds: null,
+      movingDurationSeconds: null,
+    });
+    // D: a longer non-RUN — the metric is RUN-only.
+    createActivity(harness.repository, harness.fileStore, {
+      localDate: '2026-09-04',
+      activityType: 'STRENGTH',
+      durationSeconds: 99_999,
+      movingDurationSeconds: 99_999,
+    });
+
+    const response = await harness.app.inject({ method: 'GET', url: '/api/ai/coach-context' });
+    expect(response.statusCode).toBe(200);
+    const { context } = response.json<{ context: AiCoachContext }>();
+    const longestDuration = context.personalBests.find(
+      (best) => best.metric === 'LONGEST_DURATION',
+    );
+    expect(longestDuration).toMatchObject({ value: 5000, achievedOn: '2026-09-01' });
+  });
+
   it('includes the authorized daily-status window with notes', async () => {
     harness = await buildHarness();
     harness.repository.upsertDailyStatusEntry(TODAY, {

@@ -1799,7 +1799,11 @@ export class ActivityRepository {
       .where(
         and(
           eq(activities.activityType, 'RUN'),
-          isNotNull(activities.movingDurationSeconds) || isNotNull(activities.durationSeconds),
+          // SQL OR, not JavaScript ||: a JS || between two drizzle conditions
+          // would drop the second operand (the first object is always truthy),
+          // excluding runs whose moving duration is null and breaking the
+          // moving-duration-first/total-duration fallback.
+          or(isNotNull(activities.movingDurationSeconds), isNotNull(activities.durationSeconds)),
         ),
       )
       .orderBy(
